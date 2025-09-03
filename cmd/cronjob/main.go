@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	zfsv1 "github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/apis/zfs/v1"
@@ -64,8 +66,24 @@ func main() {
 		setupLog.Info("DRY-RUN MODE ENABLED - No actual deletions will be performed")
 	}
 
+	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration)
 	defer cancel()
+
+	// Create a channel to receive OS signals
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Create a context that gets cancelled on signal
+	signalCtx, signalCancel := context.WithCancel(ctx)
+	defer signalCancel()
+
+	// Start a goroutine to handle signals
+	go func() {
+		sig := <-signalChan
+		setupLog.Info("Received shutdown signal, initiating graceful shutdown", "signal", sig.String())
+		signalCancel()
+	}()
 
 	k8sConfig := ctrl.GetConfigOrDie()
 	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme})
@@ -84,18 +102,31 @@ func main() {
 		ctrl.Log.WithName("cronjob"),
 	)
 
-	// Execute the cleanup operation
+	// Execute the cleanup operation with signal-aware context
 	startTime := time.Now()
-	result, err := reconciler.ExecuteCleanup(ctx)
+	result, err := reconciler.ExecuteCleanup(signalCtx)
 	duration := time.Since(startTime)
 
 	if err != nil {
+		// Check if the error was due to context cancellation (graceful shutdown)
+		if signalCtx.Err() == context.Canceled {
+			setupLog.Info("cleanup job interrupted by shutdown signal",
+				"duration", duration,
+				"orphanedFound", len(result.OrphanedVolumes),
+				"deleted", len(result.DeletedVolumes),
+				"failed", len(result.FailedDeletions),
+				"errors", len(result.ProcessingErrors),
+				"exitCode", 130) // Standard exit code for SIGINT
+			os.Exit(130)
+		}
+
 		setupLog.Error(err, "cleanup job failed",
 			"duration", duration,
 			"orphanedFound", len(result.OrphanedVolumes),
 			"deleted", len(result.DeletedVolumes),
 			"failed", len(result.FailedDeletions),
-			"errors", len(result.ProcessingErrors))
+			"errors", len(result.ProcessingErrors),
+			"exitCode", 1)
 		os.Exit(1)
 	}
 
