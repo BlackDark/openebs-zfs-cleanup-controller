@@ -16,6 +16,7 @@ import (
 	zfsv1 "github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/apis/zfs/v1"
 	"github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/config"
 	"github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/metrics"
+	"github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/ratelimiter"
 )
 
 // ReconcileResult contains the results of a reconciliation operation
@@ -29,25 +30,31 @@ type ReconcileResult struct {
 // ZFSVolumeReconciler reconciles ZFSVolume objects
 type ZFSVolumeReconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	Config        *config.Config
-	VolumeChecker *checker.VolumeChecker
-	Metrics       *metrics.MetricsCollector
-	Logger        logr.Logger
+	RateLimitedClient *ratelimiter.RateLimitedClient
+	Scheme            *runtime.Scheme
+	Config            *config.Config
+	VolumeChecker     *checker.VolumeChecker
+	Metrics           *metrics.MetricsCollector
+	Logger            logr.Logger
 }
 
 // NewZFSVolumeReconciler creates a new ZFSVolumeReconciler instance
 func NewZFSVolumeReconciler(client client.Client, scheme *runtime.Scheme, config *config.Config, logger logr.Logger) *ZFSVolumeReconciler {
-	volumeChecker := checker.NewVolumeChecker(client, logger.WithName("volume-checker"), config.DryRun)
+	// Create rate-limited client wrapper
+	rateLimitedClient := ratelimiter.NewRateLimitedClient(client, config.APIRateLimit, config.APIBurst)
+
+	// Use rate-limited client for volume checker
+	volumeChecker := checker.NewVolumeChecker(rateLimitedClient, logger.WithName("volume-checker"), config.DryRun)
 	metricsCollector := metrics.NewMetricsCollector()
 
 	return &ZFSVolumeReconciler{
-		Client:        client,
-		Scheme:        scheme,
-		Config:        config,
-		VolumeChecker: volumeChecker,
-		Metrics:       metricsCollector,
-		Logger:        logger.WithName("zfsvolume-reconciler"),
+		Client:            client,
+		RateLimitedClient: rateLimitedClient,
+		Scheme:            scheme,
+		Config:            config,
+		VolumeChecker:     volumeChecker,
+		Metrics:           metricsCollector,
+		Logger:            logger.WithName("zfsvolume-reconciler"),
 	}
 }
 
@@ -59,6 +66,10 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if namespace == "" {
 		namespace = "cluster-wide"
 	}
+
+	// Create a timeout context for this reconciliation
+	reconcileCtx, cancel := context.WithTimeout(ctx, r.Config.ReconcileTimeout)
+	defer cancel()
 
 	// Track active reconciliations
 	r.Metrics.IncActiveReconciliations(namespace)
@@ -77,9 +88,9 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		r.Metrics.RecordReconciliation(namespace, reconcileResult, duration)
 	}()
 
-	// Get the ZFSVolume resource
+	// Get the ZFSVolume resource using rate-limited client
 	zfsVolume := &zfsv1.ZFSVolume{}
-	if err := r.Get(ctx, req.NamespacedName, zfsVolume); err != nil {
+	if err := r.RateLimitedClient.Get(reconcileCtx, req.NamespacedName, zfsVolume); err != nil {
 		if errors.IsNotFound(err) {
 			// ZFSVolume was deleted, nothing to do
 			logger.V(1).Info("ZFSVolume not found, likely deleted - reconciliation complete")
@@ -118,7 +129,7 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Check if the ZFSVolume is orphaned
 	logger.V(1).Info("Checking if ZFSVolume is orphaned")
-	isOrphaned, err := r.VolumeChecker.IsOrphaned(ctx, zfsVolume)
+	isOrphaned, err := r.VolumeChecker.IsOrphaned(reconcileCtx, zfsVolume)
 	if err != nil {
 		// Enhanced error logging - Requirement 4.5
 		logger.Error(err, "Failed to check if ZFSVolume is orphaned",
@@ -153,7 +164,7 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Validate if it's safe to delete
 	logger.V(1).Info("Validating ZFSVolume for safe deletion")
-	validation, err := r.VolumeChecker.ValidateForDeletion(ctx, zfsVolume)
+	validation, err := r.VolumeChecker.ValidateForDeletion(reconcileCtx, zfsVolume)
 	if err != nil {
 		// Enhanced error logging - Requirement 4.5
 		logger.Error(err, "Failed to validate ZFSVolume for deletion",
@@ -200,7 +211,7 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		"namespace", zfsVolume.Namespace)
 
 	deletionStartTime := time.Now()
-	if err := r.deleteZFSVolume(ctx, zfsVolume); err != nil {
+	if err := r.deleteZFSVolume(reconcileCtx, zfsVolume); err != nil {
 		// Enhanced error logging - Requirement 4.4, 4.5
 		logger.Error(err, "Failed to delete ZFSVolume",
 			"volumeName", zfsVolume.Name,
@@ -274,8 +285,12 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 			"note", "label selector parsing will be implemented in future version")
 	}
 
+	// Create a timeout context for list operations
+	listCtx, listCancel := context.WithTimeout(ctx, r.Config.ListOperationTimeout)
+	defer listCancel()
+
 	logger.V(1).Info("Listing ZFSVolumes from Kubernetes API")
-	if err := r.List(ctx, zfsVolumeList, listOpts...); err != nil {
+	if err := r.RateLimitedClient.List(listCtx, zfsVolumeList, listOpts...); err != nil {
 		// Enhanced error logging - Requirement 4.5
 		logger.Error(err, "Failed to list ZFSVolumes from Kubernetes API",
 			"error", err.Error(),
@@ -550,7 +565,7 @@ func (r *ZFSVolumeReconciler) deleteZFSVolume(ctx context.Context, zfsVolume *zf
 
 		// Get the latest version of the resource to handle concurrent modifications
 		latestVolume := &zfsv1.ZFSVolume{}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(zfsVolume), latestVolume); err != nil {
+		if err := r.RateLimitedClient.Get(ctx, client.ObjectKeyFromObject(zfsVolume), latestVolume); err != nil {
 			if errors.IsNotFound(err) {
 				// Volume was already deleted by someone else - success
 				logger.Info("ZFSVolume was already deleted by another process",
@@ -589,7 +604,7 @@ func (r *ZFSVolumeReconciler) deleteZFSVolume(ctx context.Context, zfsVolume *zf
 
 		// Attempt to delete the ZFSVolume using the latest version
 		attemptLogger.V(1).Info("Submitting deletion request to Kubernetes API")
-		if err := r.Delete(ctx, latestVolume); err != nil {
+		if err := r.RateLimitedClient.Delete(ctx, latestVolume); err != nil {
 			if errors.IsNotFound(err) {
 				// Volume was deleted between our Get and Delete calls - success
 				logger.Info("ZFSVolume was deleted between get and delete operations",
@@ -713,7 +728,7 @@ func (r *ZFSVolumeReconciler) waitForDeletion(ctx context.Context, zfsVolume *zf
 
 			// Check if the volume still exists
 			currentVolume := &zfsv1.ZFSVolume{}
-			if err := r.Get(waitCtx, client.ObjectKeyFromObject(zfsVolume), currentVolume); err != nil {
+			if err := r.RateLimitedClient.Get(waitCtx, client.ObjectKeyFromObject(zfsVolume), currentVolume); err != nil {
 				if errors.IsNotFound(err) {
 					// Enhanced success logging - Requirement 4.4
 					logger.Info("ZFSVolume deletion completed successfully",
@@ -782,6 +797,7 @@ func (r *ZFSVolumeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&zfsv1.ZFSVolume{}).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: r.Config.MaxConcurrentReconciles,
+			RateLimiter:             ratelimiter.ControllerRateLimiter(r.Config.RetryBackoffBase, time.Minute*5),
 		}).
 		Complete(r)
 }

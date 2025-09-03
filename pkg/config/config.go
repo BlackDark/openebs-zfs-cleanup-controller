@@ -19,6 +19,12 @@ type Config struct {
 	RetryBackoffBase        time.Duration
 	MaxRetryAttempts        int
 
+	// Rate limiting settings
+	APIRateLimit         float64       // Requests per second to Kubernetes API
+	APIBurst             int           // Maximum burst size for API requests
+	ReconcileTimeout     time.Duration // Maximum time for a single reconcile operation
+	ListOperationTimeout time.Duration // Maximum time for list operations
+
 	// Filtering options
 	NamespaceFilter string
 	LabelSelector   string
@@ -52,6 +58,10 @@ func LoadConfig() (*Config, error) {
 		MaxConcurrentReconciles: getIntEnv("MAX_CONCURRENT_RECONCILES", 1),
 		RetryBackoffBase:        getDurationEnv("RETRY_BACKOFF_BASE", time.Second),
 		MaxRetryAttempts:        getIntEnv("MAX_RETRY_ATTEMPTS", 3),
+		APIRateLimit:            getFloat64Env("API_RATE_LIMIT", 10.0),
+		APIBurst:                getIntEnv("API_BURST", 15),
+		ReconcileTimeout:        getDurationEnv("RECONCILE_TIMEOUT", time.Minute*5),
+		ListOperationTimeout:    getDurationEnv("LIST_OPERATION_TIMEOUT", time.Minute*2),
 		NamespaceFilter:         getStringEnv("NAMESPACE_FILTER", ""),
 		LabelSelector:           getStringEnv("LABEL_SELECTOR", ""),
 		MetricsPort:             getIntEnv("METRICS_PORT", 8080),
@@ -136,6 +146,70 @@ func (c *Config) Validate() error {
 		})
 	}
 
+	// Validate APIRateLimit
+	if c.APIRateLimit <= 0 {
+		errors = append(errors, ValidationError{
+			Field:   "API_RATE_LIMIT",
+			Value:   fmt.Sprintf("%.2f", c.APIRateLimit),
+			Message: "must be greater than 0",
+		})
+	}
+	if c.APIRateLimit > 1000 {
+		errors = append(errors, ValidationError{
+			Field:   "API_RATE_LIMIT",
+			Value:   fmt.Sprintf("%.2f", c.APIRateLimit),
+			Message: "maximum value is 1000 requests per second",
+		})
+	}
+
+	// Validate APIBurst
+	if c.APIBurst <= 0 {
+		errors = append(errors, ValidationError{
+			Field:   "API_BURST",
+			Value:   strconv.Itoa(c.APIBurst),
+			Message: "must be greater than 0",
+		})
+	}
+	if c.APIBurst > 1000 {
+		errors = append(errors, ValidationError{
+			Field:   "API_BURST",
+			Value:   strconv.Itoa(c.APIBurst),
+			Message: "maximum value is 1000",
+		})
+	}
+
+	// Validate ReconcileTimeout
+	if c.ReconcileTimeout <= 0 {
+		errors = append(errors, ValidationError{
+			Field:   "RECONCILE_TIMEOUT",
+			Value:   c.ReconcileTimeout.String(),
+			Message: "must be greater than 0",
+		})
+	}
+	if c.ReconcileTimeout < time.Second*30 {
+		errors = append(errors, ValidationError{
+			Field:   "RECONCILE_TIMEOUT",
+			Value:   c.ReconcileTimeout.String(),
+			Message: "minimum value is 30s",
+		})
+	}
+
+	// Validate ListOperationTimeout
+	if c.ListOperationTimeout <= 0 {
+		errors = append(errors, ValidationError{
+			Field:   "LIST_OPERATION_TIMEOUT",
+			Value:   c.ListOperationTimeout.String(),
+			Message: "must be greater than 0",
+		})
+	}
+	if c.ListOperationTimeout < time.Second*10 {
+		errors = append(errors, ValidationError{
+			Field:   "LIST_OPERATION_TIMEOUT",
+			Value:   c.ListOperationTimeout.String(),
+			Message: "minimum value is 10s",
+		})
+	}
+
 	// Validate LogLevel
 	validLogLevels := []string{"debug", "info", "warn", "error"}
 	if !contains(validLogLevels, strings.ToLower(c.LogLevel)) {
@@ -166,8 +240,8 @@ func (c *Config) Validate() error {
 
 // String returns a string representation of the configuration (excluding sensitive data)
 func (c *Config) String() string {
-	return fmt.Sprintf("Config{DryRun: %t, ReconcileInterval: %s, MaxConcurrentReconciles: %d, RetryBackoffBase: %s, MaxRetryAttempts: %d, NamespaceFilter: %q, LabelSelector: %q, MetricsPort: %d, ProbePort: %d, EnableLeaderElection: %t, LogLevel: %q, LogFormat: %q}",
-		c.DryRun, c.ReconcileInterval, c.MaxConcurrentReconciles, c.RetryBackoffBase, c.MaxRetryAttempts, c.NamespaceFilter, c.LabelSelector, c.MetricsPort, c.ProbePort, c.EnableLeaderElection, c.LogLevel, c.LogFormat)
+	return fmt.Sprintf("Config{DryRun: %t, ReconcileInterval: %s, MaxConcurrentReconciles: %d, RetryBackoffBase: %s, MaxRetryAttempts: %d, APIRateLimit: %.2f, APIBurst: %d, ReconcileTimeout: %s, ListOperationTimeout: %s, NamespaceFilter: %q, LabelSelector: %q, MetricsPort: %d, ProbePort: %d, EnableLeaderElection: %t, LogLevel: %q, LogFormat: %q}",
+		c.DryRun, c.ReconcileInterval, c.MaxConcurrentReconciles, c.RetryBackoffBase, c.MaxRetryAttempts, c.APIRateLimit, c.APIBurst, c.ReconcileTimeout, c.ListOperationTimeout, c.NamespaceFilter, c.LabelSelector, c.MetricsPort, c.ProbePort, c.EnableLeaderElection, c.LogLevel, c.LogFormat)
 }
 
 func getStringEnv(key, defaultValue string) string {
@@ -198,6 +272,15 @@ func getIntEnv(key string, defaultValue int) int {
 func getDurationEnv(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if parsed, err := time.ParseDuration(value); err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+func getFloat64Env(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil {
 			return parsed
 		}
 	}

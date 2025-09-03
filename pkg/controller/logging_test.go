@@ -65,6 +65,10 @@ func TestStartupLogging(t *testing.T) {
 		MaxRetryAttempts:        3,
 		LogLevel:                "info",
 		LogFormat:               "json",
+		APIRateLimit:            10.0,
+		APIBurst:                15,
+		ReconcileTimeout:        time.Minute * 5,
+		ListOperationTimeout:    time.Minute * 2,
 	}
 
 	scheme := runtime.NewScheme()
@@ -105,6 +109,10 @@ func TestVolumeProcessingLogging(t *testing.T) {
 		MaxConcurrentReconciles: 1,
 		RetryBackoffBase:        time.Second,
 		MaxRetryAttempts:        3,
+		APIRateLimit:            10.0,
+		APIBurst:                15,
+		ReconcileTimeout:        time.Minute * 5,
+		ListOperationTimeout:    time.Minute * 2,
 	}
 
 	scheme := runtime.NewScheme()
@@ -200,6 +208,10 @@ func TestDeletionLogging(t *testing.T) {
 		MaxConcurrentReconciles: 1,
 		RetryBackoffBase:        time.Second,
 		MaxRetryAttempts:        3,
+		APIRateLimit:            10.0,
+		APIBurst:                15,
+		ReconcileTimeout:        time.Minute * 5,
+		ListOperationTimeout:    time.Minute * 2,
 	}
 
 	scheme := runtime.NewScheme()
@@ -250,6 +262,10 @@ func TestErrorLogging(t *testing.T) {
 		MaxConcurrentReconciles: 1,
 		RetryBackoffBase:        time.Second,
 		MaxRetryAttempts:        0, // Force immediate failure
+		APIRateLimit:            10.0,
+		APIBurst:                15,
+		ReconcileTimeout:        time.Minute * 5,
+		ListOperationTimeout:    time.Minute * 2,
 	}
 
 	scheme := runtime.NewScheme()
@@ -332,6 +348,10 @@ func TestLogLevels(t *testing.T) {
 		MaxConcurrentReconciles: 1,
 		RetryBackoffBase:        time.Second,
 		MaxRetryAttempts:        3,
+		APIRateLimit:            10.0,
+		APIBurst:                15,
+		ReconcileTimeout:        time.Minute * 5,
+		ListOperationTimeout:    time.Minute * 2,
 	}
 
 	scheme := runtime.NewScheme()
@@ -404,6 +424,10 @@ func TestLogContextPropagation(t *testing.T) {
 		MaxConcurrentReconciles: 1,
 		RetryBackoffBase:        time.Second,
 		MaxRetryAttempts:        3,
+		APIRateLimit:            10.0,
+		APIBurst:                15,
+		ReconcileTimeout:        time.Minute * 5,
+		ListOperationTimeout:    time.Minute * 2,
 	}
 
 	scheme := runtime.NewScheme()

@@ -43,6 +43,18 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if config.LogFormat != "json" {
 		t.Errorf("Expected LogFormat to be 'json', got %q", config.LogFormat)
 	}
+	if config.APIRateLimit != 10.0 {
+		t.Errorf("Expected APIRateLimit to be 10.0, got %f", config.APIRateLimit)
+	}
+	if config.APIBurst != 15 {
+		t.Errorf("Expected APIBurst to be 15, got %d", config.APIBurst)
+	}
+	if config.ReconcileTimeout != time.Minute*5 {
+		t.Errorf("Expected ReconcileTimeout to be 5m, got %s", config.ReconcileTimeout)
+	}
+	if config.ListOperationTimeout != time.Minute*2 {
+		t.Errorf("Expected ListOperationTimeout to be 2m, got %s", config.ListOperationTimeout)
+	}
 }
 
 func TestLoadConfig_EnvironmentVariables(t *testing.T) {
@@ -57,6 +69,10 @@ func TestLoadConfig_EnvironmentVariables(t *testing.T) {
 	os.Setenv("MAX_RETRY_ATTEMPTS", "5")
 	os.Setenv("NAMESPACE_FILTER", "openebs")
 	os.Setenv("LABEL_SELECTOR", "app=zfs")
+	os.Setenv("API_RATE_LIMIT", "25.5")
+	os.Setenv("API_BURST", "50")
+	os.Setenv("RECONCILE_TIMEOUT", "10m")
+	os.Setenv("LIST_OPERATION_TIMEOUT", "5m")
 	os.Setenv("LOG_LEVEL", "debug")
 	os.Setenv("LOG_FORMAT", "text")
 
@@ -95,20 +111,22 @@ func TestLoadConfig_EnvironmentVariables(t *testing.T) {
 	if config.LogFormat != "text" {
 		t.Errorf("Expected LogFormat to be 'text', got %q", config.LogFormat)
 	}
+	if config.APIRateLimit != 25.5 {
+		t.Errorf("Expected APIRateLimit to be 25.5, got %f", config.APIRateLimit)
+	}
+	if config.APIBurst != 50 {
+		t.Errorf("Expected APIBurst to be 50, got %d", config.APIBurst)
+	}
+	if config.ReconcileTimeout != 10*time.Minute {
+		t.Errorf("Expected ReconcileTimeout to be 10m, got %s", config.ReconcileTimeout)
+	}
+	if config.ListOperationTimeout != 5*time.Minute {
+		t.Errorf("Expected ListOperationTimeout to be 5m, got %s", config.ListOperationTimeout)
+	}
 }
 
 func TestValidate_ValidConfiguration(t *testing.T) {
-	config := &Config{
-		DryRun:                  false,
-		ReconcileInterval:       time.Hour,
-		MaxConcurrentReconciles: 1,
-		RetryBackoffBase:        time.Second,
-		MaxRetryAttempts:        3,
-		NamespaceFilter:         "",
-		LabelSelector:           "",
-		LogLevel:                "info",
-		LogFormat:               "json",
-	}
+	config := validConfig()
 
 	if err := config.Validate(); err != nil {
 		t.Errorf("Validate() failed for valid configuration: %v", err)
@@ -295,6 +313,10 @@ func TestConfig_String(t *testing.T) {
 		MaxConcurrentReconciles: 5,
 		RetryBackoffBase:        2 * time.Second,
 		MaxRetryAttempts:        5,
+		APIRateLimit:            25.5,
+		APIBurst:                50,
+		ReconcileTimeout:        10 * time.Minute,
+		ListOperationTimeout:    5 * time.Minute,
 		NamespaceFilter:         "openebs",
 		LabelSelector:           "app=zfs",
 		MetricsPort:             8080,
@@ -305,7 +327,7 @@ func TestConfig_String(t *testing.T) {
 	}
 
 	str := config.String()
-	expected := `Config{DryRun: true, ReconcileInterval: 30m0s, MaxConcurrentReconciles: 5, RetryBackoffBase: 2s, MaxRetryAttempts: 5, NamespaceFilter: "openebs", LabelSelector: "app=zfs", MetricsPort: 8080, ProbePort: 8081, EnableLeaderElection: true, LogLevel: "debug", LogFormat: "text"}`
+	expected := `Config{DryRun: true, ReconcileInterval: 30m0s, MaxConcurrentReconciles: 5, RetryBackoffBase: 2s, MaxRetryAttempts: 5, APIRateLimit: 25.50, APIBurst: 50, ReconcileTimeout: 10m0s, ListOperationTimeout: 5m0s, NamespaceFilter: "openebs", LabelSelector: "app=zfs", MetricsPort: 8080, ProbePort: 8081, EnableLeaderElection: true, LogLevel: "debug", LogFormat: "text"}`
 
 	if str != expected {
 		t.Errorf("Config.String() = %q, want %q", str, expected)
@@ -354,6 +376,10 @@ func validConfig() *Config {
 		MaxConcurrentReconciles: 1,
 		RetryBackoffBase:        time.Second,
 		MaxRetryAttempts:        3,
+		APIRateLimit:            10.0,
+		APIBurst:                15,
+		ReconcileTimeout:        time.Minute * 5,
+		ListOperationTimeout:    time.Minute * 2,
 		NamespaceFilter:         "",
 		LabelSelector:           "",
 		LogLevel:                "info",
@@ -370,11 +396,151 @@ func clearEnvVars() {
 		"MAX_RETRY_ATTEMPTS",
 		"NAMESPACE_FILTER",
 		"LABEL_SELECTOR",
+		"API_RATE_LIMIT",
+		"API_BURST",
+		"RECONCILE_TIMEOUT",
+		"LIST_OPERATION_TIMEOUT",
 		"LOG_LEVEL",
 		"LOG_FORMAT",
 	}
 
 	for _, env := range envVars {
 		os.Unsetenv(env)
+	}
+}
+func TestValidate_InvalidAPIRateLimit(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   float64
+		wantErr bool
+	}{
+		{"zero value", 0, true},
+		{"negative value", -1.0, true},
+		{"too large value", 1001.0, true},
+		{"valid small value", 0.1, false},
+		{"valid medium value", 10.0, false},
+		{"valid large value", 1000.0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := validConfig()
+			config.APIRateLimit = tt.value
+
+			err := config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidate_InvalidAPIBurst(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{"zero value", 0, true},
+		{"negative value", -1, true},
+		{"too large value", 1001, true},
+		{"valid small value", 1, false},
+		{"valid medium value", 15, false},
+		{"valid large value", 1000, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := validConfig()
+			config.APIBurst = tt.value
+
+			err := config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidate_InvalidReconcileTimeout(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		wantErr  bool
+	}{
+		{"zero duration", 0, true},
+		{"negative duration", -time.Second, true},
+		{"too small duration", 20 * time.Second, true},
+		{"valid minimum duration", 30 * time.Second, false},
+		{"valid large duration", time.Hour, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := validConfig()
+			config.ReconcileTimeout = tt.duration
+
+			err := config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidate_InvalidListOperationTimeout(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		wantErr  bool
+	}{
+		{"zero duration", 0, true},
+		{"negative duration", -time.Second, true},
+		{"too small duration", 5 * time.Second, true},
+		{"valid minimum duration", 10 * time.Second, false},
+		{"valid large duration", time.Hour, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := validConfig()
+			config.ListOperationTimeout = tt.duration
+
+			err := config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGetFloat64Env_ValidValue(t *testing.T) {
+	clearEnvVars()
+	os.Setenv("TEST_FLOAT", "25.5")
+	defer os.Unsetenv("TEST_FLOAT")
+
+	result := getFloat64Env("TEST_FLOAT", 10.0)
+	if result != 25.5 {
+		t.Errorf("getFloat64Env() = %f, want 25.5", result)
+	}
+}
+
+func TestGetFloat64Env_InvalidValue(t *testing.T) {
+	clearEnvVars()
+	os.Setenv("TEST_FLOAT", "invalid")
+	defer os.Unsetenv("TEST_FLOAT")
+
+	result := getFloat64Env("TEST_FLOAT", 42.5)
+	if result != 42.5 {
+		t.Errorf("getFloat64Env() with invalid value should return default, got %f", result)
+	}
+}
+
+func TestGetFloat64Env_EmptyValue(t *testing.T) {
+	clearEnvVars()
+
+	result := getFloat64Env("NONEXISTENT_FLOAT", 99.9)
+	if result != 99.9 {
+		t.Errorf("getFloat64Env() with empty value should return default, got %f", result)
 	}
 }
