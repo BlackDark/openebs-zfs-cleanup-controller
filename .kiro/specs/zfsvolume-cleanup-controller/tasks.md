@@ -54,7 +54,7 @@
   - Write tests to verify logging output and levels
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
 
-- [ ] 9. Create Prometheus metrics collection
+- [x] 9. Create Prometheus metrics collection
   - Implement MetricsCollector with counters, histograms, and gauges
   - Add metrics for orphaned volumes, deletion attempts, and reconciliation duration
   - Integrate metrics collection into reconciler operations

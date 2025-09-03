@@ -15,6 +15,7 @@ import (
 	"github.com/blackdark/openebs-zfsvolume-cleanup-controller/internal/checker"
 	zfsv1 "github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/apis/zfs/v1"
 	"github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/config"
+	"github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/metrics"
 )
 
 // ReconcileResult contains the results of a reconciliation operation
@@ -31,18 +32,21 @@ type ZFSVolumeReconciler struct {
 	Scheme        *runtime.Scheme
 	Config        *config.Config
 	VolumeChecker *checker.VolumeChecker
+	Metrics       *metrics.MetricsCollector
 	Logger        logr.Logger
 }
 
 // NewZFSVolumeReconciler creates a new ZFSVolumeReconciler instance
 func NewZFSVolumeReconciler(client client.Client, scheme *runtime.Scheme, config *config.Config, logger logr.Logger) *ZFSVolumeReconciler {
 	volumeChecker := checker.NewVolumeChecker(client, logger.WithName("volume-checker"), config.DryRun)
+	metricsCollector := metrics.NewMetricsCollector()
 
 	return &ZFSVolumeReconciler{
 		Client:        client,
 		Scheme:        scheme,
 		Config:        config,
 		VolumeChecker: volumeChecker,
+		Metrics:       metricsCollector,
 		Logger:        logger.WithName("zfsvolume-reconciler"),
 	}
 }
@@ -51,15 +55,26 @@ func NewZFSVolumeReconciler(client client.Client, scheme *runtime.Scheme, config
 func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	startTime := time.Now()
 	logger := r.Logger.WithValues("zfsvolume", req.NamespacedName, "reconcileID", time.Now().UnixNano())
+	namespace := req.Namespace
+	if namespace == "" {
+		namespace = "cluster-wide"
+	}
+
+	// Track active reconciliations
+	r.Metrics.IncActiveReconciliations(namespace)
+	defer r.Metrics.DecActiveReconciliations(namespace)
 
 	// Enhanced startup logging - Requirement 4.1, 4.2
 	logger.Info("Starting ZFSVolume reconciliation",
 		"reconcileInterval", r.Config.ReconcileInterval,
 		"dryRun", r.Config.DryRun)
 
+	var reconcileResult string
 	defer func() {
 		duration := time.Since(startTime)
 		logger.V(1).Info("Reconciliation completed", "duration", duration)
+		// Record reconciliation metrics
+		r.Metrics.RecordReconciliation(namespace, reconcileResult, duration)
 	}()
 
 	// Get the ZFSVolume resource
@@ -68,6 +83,7 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if errors.IsNotFound(err) {
 			// ZFSVolume was deleted, nothing to do
 			logger.V(1).Info("ZFSVolume not found, likely deleted - reconciliation complete")
+			reconcileResult = "success"
 			return ctrl.Result{}, nil
 		}
 		// Enhanced error logging - Requirement 4.5
@@ -75,8 +91,13 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"namespace", req.Namespace,
 			"name", req.Name,
 			"error", err.Error())
+		r.Metrics.RecordProcessingError(namespace, "api_error")
+		reconcileResult = "failed"
 		return ctrl.Result{}, fmt.Errorf("failed to get ZFSVolume: %w", err)
 	}
+
+	// Record that we processed a volume
+	r.Metrics.RecordVolumeProcessed(namespace)
 
 	// Log volume details - Requirement 4.2, 4.3
 	logger.Info("Processing ZFSVolume",
@@ -91,6 +112,7 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if zfsVolume.DeletionTimestamp != nil {
 		logger.Info("ZFSVolume is being deleted, skipping reconciliation",
 			"deletionTimestamp", zfsVolume.DeletionTimestamp)
+		reconcileResult = "success"
 		return ctrl.Result{}, nil
 	}
 
@@ -104,6 +126,8 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"namespace", zfsVolume.Namespace,
 			"error", err.Error(),
 			"context", "orphan status check")
+		r.Metrics.RecordProcessingError(namespace, "orphan_check_error")
+		reconcileResult = "failed"
 		return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to check orphan status: %w", err)
 	}
 
@@ -112,8 +136,12 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"action", "skip",
 			"reason", "volume has active PV or PVC references",
 			"nextReconcile", r.Config.ReconcileInterval)
+		reconcileResult = "success"
 		return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
 	}
+
+	// Record orphaned volume found
+	r.Metrics.RecordOrphanedVolume(namespace)
 
 	// Enhanced orphaned volume logging - Requirement 4.3
 	logger.Info("Found orphaned ZFSVolume",
@@ -133,6 +161,8 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"namespace", zfsVolume.Namespace,
 			"error", err.Error(),
 			"context", "deletion validation")
+		r.Metrics.RecordProcessingError(namespace, "validation_error")
+		reconcileResult = "failed"
 		return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to validate for deletion: %w", err)
 	}
 
@@ -145,6 +175,7 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"reason", validation.Reason,
 			"validationErrors", validation.ValidationErrors,
 			"nextReconcile", r.Config.ReconcileInterval)
+		reconcileResult = "success"
 		return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
 	}
 
@@ -156,6 +187,8 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"volumeName", zfsVolume.Name,
 			"namespace", zfsVolume.Namespace,
 			"reason", "orphaned volume passed safety validation")
+		r.Metrics.RecordDeletionAttempt(namespace, "dry_run", 0)
+		reconcileResult = "success"
 		return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
 	}
 
@@ -166,6 +199,7 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		"volumeName", zfsVolume.Name,
 		"namespace", zfsVolume.Namespace)
 
+	deletionStartTime := time.Now()
 	if err := r.deleteZFSVolume(ctx, zfsVolume); err != nil {
 		// Enhanced error logging - Requirement 4.4, 4.5
 		logger.Error(err, "Failed to delete ZFSVolume",
@@ -174,6 +208,8 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"error", err.Error(),
 			"context", "volume deletion",
 			"retryAfter", r.Config.RetryBackoffBase)
+		r.Metrics.RecordDeletionAttempt(namespace, "failed", time.Since(deletionStartTime))
+		reconcileResult = "failed"
 		return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to delete ZFSVolume: %w", err)
 	}
 
@@ -184,6 +220,8 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		"volumeName", zfsVolume.Name,
 		"namespace", zfsVolume.Namespace,
 		"duration", time.Since(startTime))
+	r.Metrics.RecordDeletionAttempt(namespace, "success", time.Since(deletionStartTime))
+	reconcileResult = "success"
 	return ctrl.Result{}, nil
 }
 
@@ -191,6 +229,16 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*ReconcileResult, error) {
 	startTime := time.Now()
 	logger := r.Logger.WithName("find-orphaned").WithValues("scanID", time.Now().UnixNano())
+
+	// Determine namespace for metrics (use filter or cluster-wide)
+	metricsNamespace := r.Config.NamespaceFilter
+	if metricsNamespace == "" {
+		metricsNamespace = "cluster-wide"
+	}
+
+	// Track active reconciliation
+	r.Metrics.IncActiveReconciliations(metricsNamespace)
+	defer r.Metrics.DecActiveReconciliations(metricsNamespace)
 
 	// Enhanced startup logging - Requirement 4.1, 4.2
 	logger.Info("Starting comprehensive scan for orphaned ZFSVolumes",
@@ -233,6 +281,8 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 			"error", err.Error(),
 			"context", "volume listing",
 			"namespaceFilter", r.Config.NamespaceFilter)
+		r.Metrics.RecordProcessingError(metricsNamespace, "api_error")
+		r.Metrics.RecordReconciliation(metricsNamespace, "failed", time.Since(startTime))
 		return nil, fmt.Errorf("failed to list ZFSVolumes: %w", err)
 	}
 
@@ -244,12 +294,18 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 
 	if len(zfsVolumeList.Items) == 0 {
 		logger.Info("No ZFSVolumes found in cluster", "action", "complete")
+		r.Metrics.RecordReconciliation(metricsNamespace, "success", time.Since(startTime))
 		return result, nil
 	}
 
 	// Process each ZFSVolume
 	for i, zfsVolume := range zfsVolumeList.Items {
 		volumeStartTime := time.Now()
+		volumeNamespace := zfsVolume.Namespace
+		if volumeNamespace == "" {
+			volumeNamespace = "cluster-wide"
+		}
+
 		volumeLogger := logger.WithValues(
 			"zfsvolume", zfsVolume.Name,
 			"namespace", zfsVolume.Namespace,
@@ -260,6 +316,9 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 			"createdAt", zfsVolume.CreationTimestamp,
 			"age", time.Since(zfsVolume.CreationTimestamp.Time).String(),
 			"finalizers", zfsVolume.Finalizers)
+
+		// Record that we processed a volume
+		r.Metrics.RecordVolumeProcessed(volumeNamespace)
 
 		// Skip volumes that are being deleted
 		if zfsVolume.DeletionTimestamp != nil {
@@ -279,6 +338,7 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 				"error", err.Error(),
 				"context", "orphan status check",
 				"volumeAge", time.Since(zfsVolume.CreationTimestamp.Time).String())
+			r.Metrics.RecordProcessingError(volumeNamespace, "orphan_check_error")
 			result.ProcessingErrors = append(result.ProcessingErrors, fmt.Errorf("failed to check %s/%s: %w", zfsVolume.Namespace, zfsVolume.Name, err))
 			continue
 		}
@@ -293,6 +353,9 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 
 		volumeKey := fmt.Sprintf("%s/%s", zfsVolume.Namespace, zfsVolume.Name)
 		result.OrphanedVolumes = append(result.OrphanedVolumes, volumeKey)
+
+		// Record orphaned volume found
+		r.Metrics.RecordOrphanedVolume(volumeNamespace)
 
 		// Enhanced orphaned volume logging - Requirement 4.3
 		volumeLogger.Info("Found orphaned ZFSVolume",
@@ -313,6 +376,7 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 				"error", err.Error(),
 				"context", "deletion validation",
 				"volumeAge", time.Since(zfsVolume.CreationTimestamp.Time).String())
+			r.Metrics.RecordProcessingError(volumeNamespace, "validation_error")
 			result.ProcessingErrors = append(result.ProcessingErrors, fmt.Errorf("failed to validate %s: %w", volumeKey, err))
 			continue
 		}
@@ -336,6 +400,7 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 				"mode", "dry-run",
 				"reason", "orphaned volume passed safety validation",
 				"processingTime", time.Since(volumeStartTime))
+			r.Metrics.RecordDeletionAttempt(volumeNamespace, "dry_run", time.Since(volumeStartTime))
 			continue
 		}
 
@@ -345,6 +410,7 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 			"mode", "live",
 			"reason", "orphaned volume passed safety validation")
 
+		deletionStartTime := time.Now()
 		if err := r.deleteZFSVolume(ctx, &zfsVolume); err != nil {
 			// Enhanced error logging - Requirement 4.4, 4.5
 			volumeLogger.Error(err, "Failed to delete ZFSVolume",
@@ -353,12 +419,14 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 				"error", err.Error(),
 				"context", "volume deletion",
 				"processingTime", time.Since(volumeStartTime))
+			r.Metrics.RecordDeletionAttempt(volumeNamespace, "failed", time.Since(deletionStartTime))
 			result.FailedDeletions = append(result.FailedDeletions, volumeKey)
 			result.ProcessingErrors = append(result.ProcessingErrors, fmt.Errorf("failed to delete %s: %w", volumeKey, err))
 			continue
 		}
 
 		result.DeletedVolumes = append(result.DeletedVolumes, volumeKey)
+		r.Metrics.RecordDeletionAttempt(volumeNamespace, "success", time.Since(deletionStartTime))
 		// Enhanced success logging - Requirement 4.4
 		volumeLogger.Info("Successfully deleted orphaned ZFSVolume",
 			"action", "delete",
@@ -389,6 +457,13 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 			logger.Error(procErr, "Processing error details", "errorIndex", i+1)
 		}
 	}
+
+	// Record final reconciliation metrics
+	reconcileResult := "success"
+	if len(result.ProcessingErrors) > 0 {
+		reconcileResult = "partial_failure"
+	}
+	r.Metrics.RecordReconciliation(metricsNamespace, reconcileResult, time.Since(startTime))
 
 	return result, nil
 }
