@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: zfsvolume-cleanup-controller
+  namespace: openebs
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: zfsvolume-cleanup-controller
+rules:
+  - apiGroups: ["zfs.openebs.io"]
+    resources: ["zfsvolumes"]
+    verbs: ["get", "list", "watch", "delete", "update"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes", "persistentvolumeclaims", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: zfsvolume-cleanup-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: zfsvolume-cleanup-controller
+subjects:
+  - kind: ServiceAccount
+    name: zfsvolume-cleanup-controller
+    namespace: openebs

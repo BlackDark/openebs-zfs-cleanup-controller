@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: zfsvolume-cleanup-cronjob
+  namespace: openebs
+spec:
+  schedule: "0 2 * * *" # Daily at 2am
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: zfsvolume-cleanup-cronjob
+        spec:
+          serviceAccountName: zfsvolume-cleanup-controller
+          restartPolicy: OnFailure
+          containers:
+            - name: cronjob
+              image: <REPLACE_WITH_IMAGE>
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: CONFIG_PATH
+                  value: /etc/zfsvolume-cleanup/config.yaml
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/zfsvolume-cleanup
+          volumes:
+            - name: config
+              configMap:
+                name: zfsvolume-cleanup-config

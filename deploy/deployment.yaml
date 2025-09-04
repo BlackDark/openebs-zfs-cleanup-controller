@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zfsvolume-cleanup-controller
+  namespace: openebs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zfsvolume-cleanup-controller
+  template:
+    metadata:
+      labels:
+        app: zfsvolume-cleanup-controller
+    spec:
+      serviceAccountName: zfsvolume-cleanup-controller
+      containers:
+        - name: controller
+          image: <REPLACE_WITH_IMAGE>
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CONFIG_PATH
+              value: /etc/zfsvolume-cleanup/config.yaml
+          ports:
+            - containerPort: 8080 # metrics
+            - containerPort: 8081 # health probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/zfsvolume-cleanup
+      volumes:
+        - name: config
+          configMap:
+            name: zfsvolume-cleanup-config
