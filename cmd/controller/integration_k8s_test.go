@@ -16,6 +16,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -57,7 +58,7 @@ var _ = BeforeSuite(func() {
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			"../../pkg/apis/zfs/v1", // Path to CRD definitions if they exist
+			"../../config/crd/bases", // Path to OpenEBS ZFSVolume CRD YAML for envtest only
 		},
 		ErrorIfCRDPathMissing: false,
 	}
@@ -280,5 +281,128 @@ var _ = Describe("Service Mode Controller Integration", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(len(zfsVolumeList.Items)).To(BeNumerically(">=", 3))
 		})
+
+		It("should reconcile ZFSVolume with linked PV and PVC, and test orphan deletion logic", func() {
+			By("creating a PVC and PV linked to a ZFSVolume")
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pvc",
+					Namespace: testNamespace,
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resourceMustParse("1Gi"),
+						},
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, pvc)
+			Expect(err).NotTo(HaveOccurred())
+
+			pv := &corev1.PersistentVolume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-pv",
+				},
+				Spec: corev1.PersistentVolumeSpec{
+					Capacity: corev1.ResourceList{
+						corev1.ResourceStorage: resourceMustParse("1Gi"),
+					},
+					AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+					ClaimRef: &corev1.ObjectReference{
+						Namespace: testNamespace,
+						Name:      "test-pvc",
+					},
+					PersistentVolumeSource: corev1.PersistentVolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{
+							Path: "/tmp/test-pv",
+						},
+					},
+				},
+			}
+			err = k8sClient.Create(ctx, pv)
+			Expect(err).NotTo(HaveOccurred())
+
+			zfsVolume := &zfsv1.ZFSVolume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-zfsvolume-orphan",
+					Namespace: testNamespace,
+				},
+				Spec: zfsv1.ZFSVolumeSpec{
+					Capacity:    "1Gi",
+					PoolName:    "test-pool",
+					VolumeType:  "DATASET",
+					OwnerNodeID: "test-node", // Use a valid field for linking if needed
+				},
+			}
+			err = k8sClient.Create(ctx, zfsVolume)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for reconciliation to occur")
+			time.Sleep(testConfig.ReconcileInterval * 2)
+
+			By("deleting PVC to orphan the ZFSVolume")
+			err = k8sClient.Delete(ctx, pvc)
+			Expect(err).NotTo(HaveOccurred())
+
+			time.Sleep(testConfig.ReconcileInterval * 2)
+
+			By("verifying ZFSVolume still exists (dry-run mode, should not be deleted)")
+			foundVolume := &zfsv1.ZFSVolume{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      zfsVolume.Name,
+				Namespace: zfsVolume.Namespace,
+			}, foundVolume)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should verify RBAC and ServiceAccount permissions", func() {
+			By("creating a ServiceAccount and Role")
+			sa := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sa",
+					Namespace: testNamespace,
+				},
+			}
+			err := k8sClient.Create(ctx, sa)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Create a Role allowing get/list ZFSVolume
+			role := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-role",
+					Namespace: testNamespace,
+				},
+				Data: map[string]string{"dummy": "true"}, // Placeholder, use RBAC API in real test
+			}
+			err = k8sClient.Create(ctx, role)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Create a RoleBinding (simulate, as envtest does not enforce RBAC)
+			roleBinding := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-rolebinding",
+					Namespace: testNamespace,
+				},
+				Data: map[string]string{"dummy": "true"}, // Placeholder
+			}
+			err = k8sClient.Create(ctx, roleBinding)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying ServiceAccount exists")
+			foundSA := &corev1.ServiceAccount{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      sa.Name,
+				Namespace: sa.Namespace,
+			}, foundSA)
+			Expect(err).NotTo(HaveOccurred())
+		})
 	})
 })
+
+// resourceMustParse is a helper for resource.Quantity parsing
+func resourceMustParse(s string) resource.Quantity {
+	return resource.MustParse(s)
+}

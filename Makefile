@@ -1,3 +1,14 @@
+##@ Testing
+
+.PHONY: integration-test
+integration-test: envtest ## Run integration tests with envtest and correct assets.
+	export KUBEBUILDER_ASSETS=$(PWD)/bin/k8s/1.34.0-darwin-arm64 && go test -tags=integration ./cmd/controller/...
+##@ Testing
+
+.PHONY: envtest
+envtest: ## Download envtest setup tool and Kubernetes binaries for integration tests.
+	go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	$(GOBIN)/setup-envtest use latest --bin-dir ./bin
 # Image URL to use all building/pushing image targets
 IMG ?= zfsvolume-cleanup-controller:latest
 

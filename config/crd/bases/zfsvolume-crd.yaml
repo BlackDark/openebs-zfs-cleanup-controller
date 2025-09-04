@@ -1,0 +1,64 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: zfsvolumes.zfs.openebs.io
+spec:
+  group: zfs.openebs.io
+  names:
+    kind: ZFSVolume
+    listKind: ZFSVolumeList
+    plural: zfsvolumes
+    singular: zfsvolume
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                capacity:
+                  type: string
+                poolName:
+                  type: string
+                volumeType:
+                  type: string
+                ownerNodeID:
+                  type: string
+                fsType:
+                  type: string
+                shared:
+                  type: boolean
+                cloneSpec:
+                  type: object
+                  properties:
+                    sourceVolume:
+                      type: string
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                message:
+                  type: string
+                replicaID:
+                  type: string
+                poolName:
+                  type: string
+                volumeType:
+                  type: string
+                ownerNodeID:
+                  type: string
+                fsType:
+                  type: string
+                shared:
+                  type: boolean
+                cloneSpec:
+                  type: object
+                  properties:
+                    sourceVolume:
+                      type: string
