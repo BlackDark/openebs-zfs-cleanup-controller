@@ -2,7 +2,7 @@
 
 .PHONY: integration-test
 integration-test: envtest ## Run integration tests with envtest and correct assets.
-	export KUBEBUILDER_ASSETS=$(PWD)/bin/k8s/1.34.0-darwin-arm64 && go test -tags=integration ./cmd/controller/...
+	export KUBEBUILDER_ASSETS=$(PWD)/bin/k8s/1.34.0-darwin-arm64 && go test -tags=integration ./cmd/...
 ##@ Testing
 
 .PHONY: envtest
@@ -61,19 +61,15 @@ test: fmt vet ## Run tests.
 
 .PHONY: build
 build: fmt vet ## Build manager binary.
-	go build -o bin/manager cmd/controller/main.go
-
-.PHONY: build-cronjob
-build-cronjob: fmt vet ## Build cronjob binary.
-	go build -o bin/cronjob cmd/cronjob/main.go
+	go build -o bin/manager cmd/main.go
 
 .PHONY: run
 run: fmt vet ## Run a controller from your host.
-	go run cmd/controller/main.go
+	go run cmd/main.go
 
 .PHONY: run-cronjob
 run-cronjob: fmt vet ## Run cronjob from your host.
-	go run cmd/cronjob/main.go
+	go run cmd/main.go --mode=cronjob
 
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.

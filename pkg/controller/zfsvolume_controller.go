@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,8 +44,16 @@ func NewZFSVolumeReconciler(client client.Client, scheme *runtime.Scheme, config
 	// Create rate-limited client wrapper
 	rateLimitedClient := ratelimiter.NewRateLimitedClient(client, config.APIRateLimit, config.APIBurst)
 
-	// Use rate-limited client for volume checker
-	volumeChecker := checker.NewVolumeChecker(rateLimitedClient, logger.WithName("volume-checker"), config.DryRun)
+	// Use rate-limited client for volume checker with configurable PV label selector
+	pvLabelSelector := config.PVLabelSelector
+	if pvLabelSelector == "" {
+		pvLabelSelector = "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io" // Default fallback
+	}
+
+	// Enable caching for cronjob mode, disable for controller mode
+	enableCaching := config.CronJobMode
+
+	volumeChecker := checker.NewVolumeChecker(rateLimitedClient, logger.WithName("volume-checker"), config.DryRun, pvLabelSelector, enableCaching)
 	metricsCollector := metrics.NewMetricsCollector()
 
 	return &ZFSVolumeReconciler{
@@ -266,8 +275,7 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 		ProcessingErrors: []error{},
 	}
 
-	// List all ZFSVolumes
-	zfsVolumeList := &zfsv1.ZFSVolumeList{}
+	// Build list options with filters and pagination
 	listOpts := []client.ListOption{}
 
 	// Apply namespace filter if configured
@@ -278,43 +286,88 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 
 	// Apply label selector if configured
 	if r.Config.LabelSelector != "" {
-		// For now, we'll skip label selector parsing as it requires more complex implementation
-		// This can be enhanced later to parse the label selector string
-		logger.Info("Label selector configured but parsing not implemented yet",
-			"selector", r.Config.LabelSelector,
-			"note", "label selector parsing will be implemented in future version")
+		selector, err := labels.Parse(r.Config.LabelSelector)
+		if err != nil {
+			logger.Error(err, "Failed to parse label selector, skipping filter",
+				"selector", r.Config.LabelSelector,
+				"error", err.Error())
+			r.Metrics.RecordProcessingError(metricsNamespace, "label_selector_parse_error")
+		} else {
+			listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
+			logger.Info("Applying label selector", "selector", r.Config.LabelSelector)
+		}
 	}
 
 	// Create a timeout context for list operations
 	listCtx, listCancel := context.WithTimeout(ctx, r.Config.ListOperationTimeout)
 	defer listCancel()
 
-	logger.V(1).Info("Listing ZFSVolumes from Kubernetes API")
-	if err := r.RateLimitedClient.List(listCtx, zfsVolumeList, listOpts...); err != nil {
-		// Enhanced error logging - Requirement 4.5
-		logger.Error(err, "Failed to list ZFSVolumes from Kubernetes API",
-			"error", err.Error(),
-			"context", "volume listing",
-			"namespaceFilter", r.Config.NamespaceFilter)
-		r.Metrics.RecordProcessingError(metricsNamespace, "api_error")
-		r.Metrics.RecordReconciliation(metricsNamespace, "failed", time.Since(startTime))
-		return nil, fmt.Errorf("failed to list ZFSVolumes: %w", err)
+	// Use pagination to handle large result sets efficiently
+	const pageSize = 500 // Process in batches of 500 to optimize memory usage
+	allZFSVolumes := make([]zfsv1.ZFSVolume, 0)
+	continueToken := ""
+
+	for {
+		// Create a fresh list for each page
+		zfsVolumeList := &zfsv1.ZFSVolumeList{}
+		pageOpts := append(listOpts, client.Limit(pageSize))
+		if continueToken != "" {
+			pageOpts = append(pageOpts, client.Continue(continueToken))
+		}
+
+		logger.V(1).Info("Listing ZFSVolumes from Kubernetes API",
+			"pageSize", pageSize,
+			"continueToken", continueToken)
+
+		if err := r.RateLimitedClient.List(listCtx, zfsVolumeList, pageOpts...); err != nil {
+			// Enhanced error logging - Requirement 4.5
+			logger.Error(err, "Failed to list ZFSVolumes from Kubernetes API",
+				"error", err.Error(),
+				"context", "volume listing",
+				"namespaceFilter", r.Config.NamespaceFilter,
+				"labelSelector", r.Config.LabelSelector)
+			r.Metrics.RecordProcessingError(metricsNamespace, "api_error")
+			r.Metrics.RecordReconciliation(metricsNamespace, "failed", time.Since(startTime))
+			return nil, fmt.Errorf("failed to list ZFSVolumes: %w", err)
+		}
+
+		// Add this page's items to our collection
+		allZFSVolumes = append(allZFSVolumes, zfsVolumeList.Items...)
+
+		// Check if there are more pages
+		continueToken = zfsVolumeList.GetContinue()
+		if continueToken == "" {
+			break // No more pages
+		}
+
+		logger.V(1).Info("Fetched page of ZFSVolumes",
+			"pageSize", len(zfsVolumeList.Items),
+			"totalSoFar", len(allZFSVolumes),
+			"hasMorePages", continueToken != "")
 	}
 
 	// Enhanced volume processing logging - Requirement 4.2
 	logger.Info("Found ZFSVolumes to process",
-		"totalCount", len(zfsVolumeList.Items),
+		"totalCount", len(allZFSVolumes),
 		"namespaceFilter", r.Config.NamespaceFilter,
+		"labelSelector", r.Config.LabelSelector,
 		"processingStartTime", startTime)
 
-	if len(zfsVolumeList.Items) == 0 {
+	if len(allZFSVolumes) == 0 {
 		logger.Info("No ZFSVolumes found in cluster", "action", "complete")
 		r.Metrics.RecordReconciliation(metricsNamespace, "success", time.Since(startTime))
 		return result, nil
 	}
 
+	// Populate cache for efficient PV/PVC lookups
+	logger.Info("Populating PV/PVC cache for efficient lookups")
+	if err := r.VolumeChecker.PopulateCache(ctx); err != nil {
+		logger.Error(err, "Failed to populate cache, performance may be degraded")
+		// Continue without cache - fallback to direct API calls
+	}
+
 	// Process each ZFSVolume
-	for i, zfsVolume := range zfsVolumeList.Items {
+	for i, zfsVolume := range allZFSVolumes {
 		volumeStartTime := time.Now()
 		volumeNamespace := zfsVolume.Namespace
 		if volumeNamespace == "" {
@@ -325,7 +378,7 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 			"zfsvolume", zfsVolume.Name,
 			"namespace", zfsVolume.Namespace,
 			"volumeIndex", i+1,
-			"totalVolumes", len(zfsVolumeList.Items))
+			"totalVolumes", len(allZFSVolumes))
 
 		volumeLogger.V(1).Info("Processing ZFSVolume",
 			"createdAt", zfsVolume.CreationTimestamp,
@@ -453,13 +506,13 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 	totalDuration := time.Since(startTime)
 	// Enhanced completion logging - Requirement 4.2, 4.3, 4.4
 	logger.Info("Completed scan for orphaned ZFSVolumes",
-		"totalProcessed", len(zfsVolumeList.Items),
+		"totalProcessed", len(allZFSVolumes),
 		"orphanedFound", len(result.OrphanedVolumes),
 		"volumesDeleted", len(result.DeletedVolumes),
 		"deletionsFailed", len(result.FailedDeletions),
 		"processingErrors", len(result.ProcessingErrors),
 		"totalDuration", totalDuration,
-		"averageTimePerVolume", time.Duration(int64(totalDuration)/int64(max(len(zfsVolumeList.Items), 1))),
+		"averageTimePerVolume", time.Duration(int64(totalDuration)/int64(max(len(allZFSVolumes), 1))),
 		"orphanedVolumes", result.OrphanedVolumes,
 		"deletedVolumes", result.DeletedVolumes,
 		"failedDeletions", result.FailedDeletions)
@@ -520,11 +573,30 @@ func (r *ZFSVolumeReconciler) deleteZFSVolume(ctx context.Context, zfsVolume *zf
 
 	// Check if the volume has finalizers - respect them and don't force deletion
 	if len(zfsVolume.Finalizers) > 0 {
-		logger.Info("ZFSVolume has finalizers, respecting them and not forcing deletion",
-			"finalizers", zfsVolume.Finalizers,
-			"action", "abort",
-			"reason", "finalizers must be handled first")
-		return fmt.Errorf("ZFSVolume has finalizers that must be handled first: %v", zfsVolume.Finalizers)
+		// Filter out zfs.openebs.io/finalizer for orphaned volumes (same logic as validation)
+		blockingFinalizers := []string{}
+		ignoredFinalizers := []string{}
+
+		for _, finalizer := range zfsVolume.Finalizers {
+			if finalizer == "zfs.openebs.io/finalizer" {
+				// Skip this finalizer for orphaned volumes
+				ignoredFinalizers = append(ignoredFinalizers, finalizer)
+				logger.Info("Ignoring zfs.openebs.io/finalizer for orphaned volume during deletion",
+					"finalizer", finalizer,
+					"reason", "volume is orphaned")
+				continue
+			}
+			blockingFinalizers = append(blockingFinalizers, finalizer)
+		}
+
+		if len(blockingFinalizers) > 0 {
+			logger.Info("ZFSVolume has blocking finalizers, respecting them and not forcing deletion",
+				"blockingFinalizers", blockingFinalizers,
+				"ignoredFinalizers", ignoredFinalizers,
+				"action", "abort",
+				"reason", "finalizers must be handled first")
+			return fmt.Errorf("ZFSVolume has finalizers that must be handled first: %v", blockingFinalizers)
+		}
 	}
 
 	// Implement retry logic with exponential backoff
@@ -595,11 +667,30 @@ func (r *ZFSVolumeReconciler) deleteZFSVolume(ctx context.Context, zfsVolume *zf
 
 		// Check if finalizers were added since we last checked
 		if len(latestVolume.Finalizers) > 0 {
-			logger.Info("ZFSVolume now has finalizers, cannot proceed with deletion",
-				"finalizers", latestVolume.Finalizers,
-				"action", "abort",
-				"reason", "finalizers added during deletion process")
-			return fmt.Errorf("ZFSVolume now has finalizers that must be handled first: %v", latestVolume.Finalizers)
+			// Filter out zfs.openebs.io/finalizer for orphaned volumes (same logic as validation)
+			blockingFinalizers := []string{}
+			ignoredFinalizers := []string{}
+
+			for _, finalizer := range latestVolume.Finalizers {
+				if finalizer == "zfs.openebs.io/finalizer" {
+					// Skip this finalizer for orphaned volumes
+					ignoredFinalizers = append(ignoredFinalizers, finalizer)
+					attemptLogger.Info("Ignoring zfs.openebs.io/finalizer for orphaned volume during deletion",
+						"finalizer", finalizer,
+						"reason", "volume is orphaned")
+					continue
+				}
+				blockingFinalizers = append(blockingFinalizers, finalizer)
+			}
+
+			if len(blockingFinalizers) > 0 {
+				attemptLogger.Info("ZFSVolume now has blocking finalizers, cannot proceed with deletion",
+					"blockingFinalizers", blockingFinalizers,
+					"ignoredFinalizers", ignoredFinalizers,
+					"action", "abort",
+					"reason", "finalizers added during deletion process")
+				return fmt.Errorf("ZFSVolume now has finalizers that must be handled first: %v", blockingFinalizers)
+			}
 		}
 
 		// Attempt to delete the ZFSVolume using the latest version
@@ -771,6 +862,12 @@ func (r *ZFSVolumeReconciler) isTransientError(err error) bool {
 func (r *ZFSVolumeReconciler) ExecuteCleanup(ctx context.Context) (*ReconcileResult, error) {
 	logger := r.Logger.WithName("cleanup-execution")
 	logger.Info("Starting one-time cleanup execution")
+
+	// Populate cache for efficient lookups in cronjob mode
+	logger.Info("Populating PV/PVC cache for cronjob execution")
+	if err := r.VolumeChecker.PopulateCache(ctx); err != nil {
+		logger.Error(err, "Failed to populate cache, falling back to direct API calls")
+	}
 
 	startTime := time.Now()
 	result, err := r.findOrphanedZFSVolumes(ctx)

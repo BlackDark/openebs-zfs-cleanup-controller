@@ -319,6 +319,7 @@ func TestConfig_String(t *testing.T) {
 		ListOperationTimeout:    5 * time.Minute,
 		NamespaceFilter:         "openebs",
 		LabelSelector:           "app=zfs",
+		PVLabelSelector:         "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io",
 		MetricsPort:             8080,
 		ProbePort:               8081,
 		EnableLeaderElection:    true,
@@ -327,7 +328,7 @@ func TestConfig_String(t *testing.T) {
 	}
 
 	str := config.String()
-	expected := `Config{DryRun: true, ReconcileInterval: 30m0s, MaxConcurrentReconciles: 5, RetryBackoffBase: 2s, MaxRetryAttempts: 5, APIRateLimit: 25.50, APIBurst: 50, ReconcileTimeout: 10m0s, ListOperationTimeout: 5m0s, NamespaceFilter: "openebs", LabelSelector: "app=zfs", MetricsPort: 8080, ProbePort: 8081, EnableLeaderElection: true, LogLevel: "debug", LogFormat: "text"}`
+	expected := `Config{DryRun: true, ReconcileInterval: 30m0s, MaxConcurrentReconciles: 5, RetryBackoffBase: 2s, MaxRetryAttempts: 5, APIRateLimit: 25.50, APIBurst: 50, ReconcileTimeout: 10m0s, ListOperationTimeout: 5m0s, NamespaceFilter: "openebs", LabelSelector: "app=zfs", PVLabelSelector: "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io", MetricsPort: 8080, ProbePort: 8081, EnableLeaderElection: true, LogLevel: "debug", LogFormat: "text"}`
 
 	if str != expected {
 		t.Errorf("Config.String() = %q, want %q", str, expected)

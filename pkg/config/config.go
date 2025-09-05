@@ -12,6 +12,7 @@ import (
 type Config struct {
 	// Execution mode
 	DryRun            bool
+	CronJobMode       bool // Whether running in cronjob mode (affects caching strategy)
 	ReconcileInterval time.Duration
 
 	// Safety settings
@@ -28,6 +29,7 @@ type Config struct {
 	// Filtering options
 	NamespaceFilter string
 	LabelSelector   string
+	PVLabelSelector string
 
 	// Server configuration
 	MetricsPort          int
@@ -54,6 +56,7 @@ func (e ValidationError) Error() string {
 func LoadConfig() (*Config, error) {
 	config := &Config{
 		DryRun:                  getBoolEnv("DRY_RUN", false),
+		CronJobMode:             getBoolEnv("CRONJOB_MODE", false),
 		ReconcileInterval:       getDurationEnv("RECONCILE_INTERVAL", time.Hour),
 		MaxConcurrentReconciles: getIntEnv("MAX_CONCURRENT_RECONCILES", 1),
 		RetryBackoffBase:        getDurationEnv("RETRY_BACKOFF_BASE", time.Second),
@@ -64,6 +67,7 @@ func LoadConfig() (*Config, error) {
 		ListOperationTimeout:    getDurationEnv("LIST_OPERATION_TIMEOUT", time.Minute*2),
 		NamespaceFilter:         getStringEnv("NAMESPACE_FILTER", ""),
 		LabelSelector:           getStringEnv("LABEL_SELECTOR", ""),
+		PVLabelSelector:         getStringEnv("PV_LABEL_SELECTOR", "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io"),
 		MetricsPort:             getIntEnv("METRICS_PORT", 8080),
 		ProbePort:               getIntEnv("PROBE_PORT", 8081),
 		EnableLeaderElection:    getBoolEnv("ENABLE_LEADER_ELECTION", false),
@@ -240,8 +244,8 @@ func (c *Config) Validate() error {
 
 // String returns a string representation of the configuration (excluding sensitive data)
 func (c *Config) String() string {
-	return fmt.Sprintf("Config{DryRun: %t, ReconcileInterval: %s, MaxConcurrentReconciles: %d, RetryBackoffBase: %s, MaxRetryAttempts: %d, APIRateLimit: %.2f, APIBurst: %d, ReconcileTimeout: %s, ListOperationTimeout: %s, NamespaceFilter: %q, LabelSelector: %q, MetricsPort: %d, ProbePort: %d, EnableLeaderElection: %t, LogLevel: %q, LogFormat: %q}",
-		c.DryRun, c.ReconcileInterval, c.MaxConcurrentReconciles, c.RetryBackoffBase, c.MaxRetryAttempts, c.APIRateLimit, c.APIBurst, c.ReconcileTimeout, c.ListOperationTimeout, c.NamespaceFilter, c.LabelSelector, c.MetricsPort, c.ProbePort, c.EnableLeaderElection, c.LogLevel, c.LogFormat)
+	return fmt.Sprintf("Config{DryRun: %t, ReconcileInterval: %s, MaxConcurrentReconciles: %d, RetryBackoffBase: %s, MaxRetryAttempts: %d, APIRateLimit: %.2f, APIBurst: %d, ReconcileTimeout: %s, ListOperationTimeout: %s, NamespaceFilter: %q, LabelSelector: %q, PVLabelSelector: %q, MetricsPort: %d, ProbePort: %d, EnableLeaderElection: %t, LogLevel: %q, LogFormat: %q}",
+		c.DryRun, c.ReconcileInterval, c.MaxConcurrentReconciles, c.RetryBackoffBase, c.MaxRetryAttempts, c.APIRateLimit, c.APIBurst, c.ReconcileTimeout, c.ListOperationTimeout, c.NamespaceFilter, c.LabelSelector, c.PVLabelSelector, c.MetricsPort, c.ProbePort, c.EnableLeaderElection, c.LogLevel, c.LogFormat)
 }
 
 func getStringEnv(key, defaultValue string) string {

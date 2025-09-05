@@ -18,6 +18,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -32,18 +33,31 @@ func init() {
 }
 
 func main() {
+	var mode string
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
 	var version string
 	var gracefulShutdownTimeout string
+	var timeout string
+
+	// Mode selection flag
+	flag.StringVar(&mode, "mode", "controller", "Mode to run in: 'controller' for long-running service, 'cronjob' for one-time execution")
+
+	// Controller mode flags
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&version, "version", "dev", "Version of the controller")
 	flag.StringVar(&gracefulShutdownTimeout, "graceful-shutdown-timeout", "30s", "Maximum time to wait for graceful shutdown")
+
+	// Cronjob mode flags
+	flag.StringVar(&timeout, "timeout", "5m", "Maximum execution time for the cleanup job (cronjob mode only)")
+
+	// Common flags
+	flag.StringVar(&version, "version", "dev", "Version of the controller")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -52,13 +66,6 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Parse graceful shutdown timeout
-	shutdownTimeout, err := time.ParseDuration(gracefulShutdownTimeout)
-	if err != nil {
-		setupLog.Error(err, "invalid graceful shutdown timeout")
-		os.Exit(1)
-	}
-
 	// Load configuration from environment variables
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -66,18 +73,142 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set mode-specific configuration
+	switch mode {
+	case "cronjob":
+		cfg.CronJobMode = true
+		setupLog.Info("Running in cronjob mode - one-time cleanup execution")
+	case "controller":
+		cfg.CronJobMode = false
+		setupLog.Info("Running in controller mode - long-running service")
+	default:
+		setupLog.Error(nil, "invalid mode specified", "mode", mode, "validModes", []string{"controller", "cronjob"})
+		os.Exit(1)
+	}
+
 	// Log startup information - Requirement 4.1
 	setupLog.Info("ZFSVolume Cleanup Controller starting",
 		"version", version,
-		"mode", "service",
-		"configuration", cfg.String(),
-		"metricsAddress", metricsAddr,
-		"probeAddress", probeAddr,
-		"leaderElection", enableLeaderElection,
-		"gracefulShutdownTimeout", shutdownTimeout)
+		"mode", mode,
+		"configuration", cfg.String())
 
 	if cfg.DryRun {
 		setupLog.Info("DRY-RUN MODE ENABLED - No actual deletions will be performed")
+	}
+
+	// Execute based on mode
+	if mode == "cronjob" {
+		runCronJob(cfg, version, timeout)
+	} else {
+		runController(cfg, version, metricsAddr, probeAddr, enableLeaderElection, gracefulShutdownTimeout)
+	}
+}
+
+func runCronJob(cfg *config.Config, version, timeout string) {
+	timeoutDuration, err := time.ParseDuration(timeout)
+	if err != nil {
+		setupLog.Error(err, "invalid timeout duration")
+		os.Exit(1)
+	}
+
+	setupLog.Info("starting one-time cleanup job", "timeout", timeoutDuration)
+
+	// Set up signal handling for graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration)
+	defer cancel()
+
+	// Create a channel to receive OS signals
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Create a context that gets cancelled on signal
+	signalCtx, signalCancel := context.WithCancel(ctx)
+	defer signalCancel()
+
+	// Start a goroutine to handle signals
+	go func() {
+		sig := <-signalChan
+		setupLog.Info("Received shutdown signal, initiating graceful shutdown", "signal", sig.String())
+		signalCancel()
+	}()
+
+	k8sConfig := ctrl.GetConfigOrDie()
+	k8sClient, err := client.New(k8sConfig, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "unable to create client")
+		os.Exit(1)
+	}
+
+	// Create reconciler for one-time execution
+	reconciler := controller.NewZFSVolumeReconciler(
+		k8sClient,
+		scheme,
+		cfg,
+		ctrl.Log.WithName("cronjob"),
+	)
+
+	// Execute the cleanup operation with signal-aware context
+	startTime := time.Now()
+	result, err := reconciler.ExecuteCleanup(signalCtx)
+	duration := time.Since(startTime)
+
+	if err != nil {
+		// Check if the error was due to context cancellation (graceful shutdown)
+		if signalCtx.Err() == context.Canceled {
+			setupLog.Info("cleanup job interrupted by shutdown signal",
+				"duration", duration,
+				"orphanedFound", len(result.OrphanedVolumes),
+				"deleted", len(result.DeletedVolumes),
+				"failed", len(result.FailedDeletions),
+				"errors", len(result.ProcessingErrors),
+				"exitCode", 130) // Standard exit code for SIGINT
+			os.Exit(130)
+		}
+
+		setupLog.Error(err, "cleanup job failed",
+			"duration", duration,
+			"orphanedFound", len(result.OrphanedVolumes),
+			"deleted", len(result.DeletedVolumes),
+			"failed", len(result.FailedDeletions),
+			"errors", len(result.ProcessingErrors),
+			"exitCode", 1)
+		os.Exit(1)
+	}
+
+	// Log completion with comprehensive results - Requirement 4.2, 4.3, 4.4
+	setupLog.Info("cleanup job completed successfully",
+		"duration", duration,
+		"orphanedVolumesFound", len(result.OrphanedVolumes),
+		"volumesDeleted", len(result.DeletedVolumes),
+		"deletionsFailed", len(result.FailedDeletions),
+		"processingErrors", len(result.ProcessingErrors),
+		"orphanedVolumes", result.OrphanedVolumes,
+		"deletedVolumes", result.DeletedVolumes,
+		"failedDeletions", result.FailedDeletions)
+
+	if len(result.ProcessingErrors) > 0 {
+		setupLog.Info("processing errors encountered during cleanup",
+			"errorCount", len(result.ProcessingErrors))
+		for i, procErr := range result.ProcessingErrors {
+			setupLog.Error(procErr, "processing error", "errorIndex", i)
+		}
+	}
+
+	// Exit with appropriate code
+	if len(result.FailedDeletions) > 0 || len(result.ProcessingErrors) > 0 {
+		setupLog.Info("cleanup completed with some errors", "exitCode", 1)
+		os.Exit(1)
+	}
+
+	setupLog.Info("cleanup completed successfully", "exitCode", 0)
+}
+
+func runController(cfg *config.Config, version, metricsAddr, probeAddr string, enableLeaderElection bool, gracefulShutdownTimeout string) {
+	// Parse graceful shutdown timeout
+	shutdownTimeout, err := time.ParseDuration(gracefulShutdownTimeout)
+	if err != nil {
+		setupLog.Error(err, "invalid graceful shutdown timeout")
+		os.Exit(1)
 	}
 
 	// Create controller manager with configurable reconcile intervals
@@ -120,7 +251,11 @@ func main() {
 		"retryBackoffBase", cfg.RetryBackoffBase,
 		"maxRetryAttempts", cfg.MaxRetryAttempts,
 		"apiRateLimit", cfg.APIRateLimit,
-		"apiBurst", cfg.APIBurst)
+		"apiBurst", cfg.APIBurst,
+		"metricsAddress", metricsAddr,
+		"probeAddress", probeAddr,
+		"leaderElection", enableLeaderElection,
+		"gracefulShutdownTimeout", shutdownTimeout)
 
 	// Set up graceful shutdown handling
 	ctx := setupGracefulShutdown(shutdownTimeout)

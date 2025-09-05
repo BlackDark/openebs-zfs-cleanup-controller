@@ -179,11 +179,10 @@ func TestOrphanedVolumeLogging(t *testing.T) {
 		WithObjects(zfsVolume).
 		Build()
 
-	volumeChecker := checker.NewVolumeChecker(fakeClient, logCapture.GetLogger(), false)
+	volumeChecker := checker.NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io", true)
 
 	ctx := context.Background()
 	isOrphaned, err := volumeChecker.IsOrphaned(ctx, zfsVolume)
-
 	assert.NoError(t, err)
 	assert.True(t, isOrphaned)
 
@@ -318,7 +317,7 @@ func TestDryRunLogging(t *testing.T) {
 		WithObjects(zfsVolume).
 		Build()
 
-	volumeChecker := checker.NewVolumeChecker(fakeClient, logCapture.GetLogger(), true)
+	volumeChecker := checker.NewVolumeChecker(fakeClient, logCapture.GetLogger(), true, "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io", true)
 
 	// Test dry-run logging
 	validation := &checker.ValidationResult{
@@ -395,7 +394,7 @@ func TestStructuredLogging(t *testing.T) {
 		WithObjects(zfsVolume).
 		Build()
 
-	volumeChecker := checker.NewVolumeChecker(fakeClient, logCapture.GetLogger(), false)
+	volumeChecker := checker.NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io", true)
 
 	ctx := context.Background()
 	_, err := volumeChecker.IsOrphaned(ctx, zfsVolume)

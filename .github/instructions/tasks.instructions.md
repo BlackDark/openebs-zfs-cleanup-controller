@@ -126,7 +126,7 @@
   - Document troubleshooting steps and common issues
   - _Requirements: 6.2, 6.3_
 
-- [ ] 17. Implement performance optimizations
+- [x] 17. Implement performance optimizations
 
   - Add efficient list operations with label selectors and field selectors
   - Implement pagination for large volume sets
@@ -134,7 +134,24 @@
   - Write performance tests to validate scalability improvements
   - _Requirements: 5.5, 6.4_
 
-- [ ] 18. Create end-to-end testing framework
+- [x] 18. Implement local caching for API optimization
+
+  - Add local PV and PVC caches with TTL-based expiration
+  - Implement cache-first lookup pattern with fallback to API calls
+  - Add fallback mechanism when label selectors return no results
+  - Write unit tests for caching behavior and cache invalidation
+  - _Requirements: 5.5, 6.4_
+
+- [x] 19. Implement mode-specific caching optimization
+
+  - Add enableCaching parameter to VolumeChecker for mode-specific control
+  - Enable caching only for cronjob mode, disable for controller mode
+  - Update controller to detect execution mode and configure caching accordingly
+  - Fix all test files to use updated NewVolumeChecker signature
+  - Verify all tests pass and builds succeed
+  - _Requirements: Performance optimization for batch vs real-time processing_
+
+- [ ] 20. Create end-to-end testing framework
   - Build test harness that creates realistic OpenEBS ZFS scenarios
   - Test complete workflows from volume creation to cleanup
   - Verify metrics accuracy and logging completeness

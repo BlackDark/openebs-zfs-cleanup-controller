@@ -18,6 +18,8 @@ spec:
             - name: cronjob
               image: <REPLACE_WITH_IMAGE>
               imagePullPolicy: IfNotPresent
+              args:
+                - "--mode=cronjob"
               env:
                 - name: CONFIG_PATH
                   value: /etc/zfsvolume-cleanup/config.yaml

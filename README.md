@@ -10,10 +10,31 @@ This controller identifies ZFSVolumes that are no longer associated with any Per
 
 - Automated detection of orphaned ZFSVolume CRDs
 - Safe deletion with comprehensive validation
-- Support for both CronJob and long-running deployment modes
+- **Unified binary** supporting both CronJob and long-running deployment modes
+- Mode selection via `--mode` flag (`controller`=default or `cronjob`)
 - Comprehensive logging and Prometheus metrics
 - Configurable dry-run mode
 - Minimal RBAC permissions following security best practices
+
+## Unified Binary Architecture
+
+This project uses a single binary that can operate in two modes:
+
+- **Controller Mode** (`--mode=controller`): Long-running service that continuously monitors and cleans up orphaned ZFSVolumes
+- **CronJob Mode** (`--mode=cronjob`): One-time execution that performs cleanup and exits
+
+### Mode Selection
+
+```bash
+# Controller mode (default)
+./bin/manager
+./bin/manager --mode=controller
+
+# CronJob mode
+./bin/manager --mode=cronjob --timeout=5m
+```
+
+The same binary and Docker image can be used for both deployment types, simplifying the build and deployment process.
 
 ## Quick Start
 
@@ -26,11 +47,8 @@ This controller identifies ZFSVolumes that are no longer associated with any Per
 ### Building
 
 ```bash
-# Build the controller binary
+# Build the unified binary (works for both controller and cronjob modes)
 make build
-
-# Build the cronjob binary
-make build-cronjob
 
 # Build Docker image
 make docker-build
@@ -39,11 +57,15 @@ make docker-build
 ### Running
 
 ```bash
-# Run as controller (long-running service)
+# Run as controller (long-running service) - default mode
 make run
 
 # Run as one-time job
 make run-cronjob
+
+# Or run directly with mode flags
+./bin/manager --mode=controller
+./bin/manager --mode=cronjob --timeout=10m
 ```
 
 ## Configuration
@@ -103,6 +125,8 @@ spec:
 					containers:
 					- name: cleanup
 						image: your-repo/zfsvolume-cleanup:latest
+						args:
+						- "--mode=cronjob"
 						envFrom:
 						- configMapRef:
 								name: zfsvolume-cleanup-config
@@ -129,6 +153,8 @@ spec:
 			containers:
 			- name: controller
 				image: your-repo/zfsvolume-cleanup:latest
+				args:
+				- "--mode=controller"
 				envFrom:
 				- configMapRef:
 						name: zfsvolume-cleanup-config
@@ -178,6 +204,23 @@ make fmt
 # Run linter
 make vet
 ```
+
+### Local testing
+
+```bash
+# build the binaries
+make build
+
+# Load envs
+echo "DRY_RUN=true" > .env                                     
+echo "RECONCILE_INTERVAL=30s" >> .env
+echo "LOG_LEVEL=debug" >> .env
+
+export $(cat .env | xargs)
+
+./bin/manager --mode=cronjob
+```
+
 
 ## License
 

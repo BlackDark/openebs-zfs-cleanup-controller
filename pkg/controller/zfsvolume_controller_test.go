@@ -160,6 +160,9 @@ func TestZFSVolumeReconciler_Reconcile_NotOrphaned(t *testing.T) {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-pv",
+			Labels: map[string]string{
+				"openebs.io/cas-type": "zfs-localpv",
+			},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
@@ -341,6 +344,9 @@ func TestZFSVolumeReconciler_findOrphanedZFSVolumes(t *testing.T) {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-pv",
+			Labels: map[string]string{
+				"pv.kubernetes.io/provisioned-by": "zfs.csi.openebs.io",
+			},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
@@ -952,6 +958,9 @@ func TestZFSVolumeReconciler_ConcurrentReconciliation(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      fmt.Sprintf("concurrent-volume-%d", i),
 				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"openebs.io/cas-type": "zfs-localpv",
+				},
 			},
 			Spec: zfsv1.ZFSVolumeSpec{
 				Capacity: "1Gi",
