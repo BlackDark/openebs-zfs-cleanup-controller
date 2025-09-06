@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	zfsv1 "github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/apis/zfs/v1"
 )
@@ -172,7 +174,7 @@ func TestControllerRateLimiter(t *testing.T) {
 	}
 
 	// Test that it returns delays for failures
-	item := "test-item"
+	item := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-item", Namespace: "default"}}
 
 	// First failure should have base delay
 	delay := rateLimiter.When(item)

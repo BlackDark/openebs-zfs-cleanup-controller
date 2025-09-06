@@ -1,0 +1,50 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    "customManagers:githubActionsVersions",
+    "schedule:monthly",
+    ":prConcurrentLimitNone",
+    ":prHourlyLimitNone",
+    ":pinVersions",
+  ],
+  ignorePaths: [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**",
+  ],
+  labels: ["dependencies"],
+  packageRules: [
+    {
+      matchUpdateTypes: ["minor", "patch", "pin"],
+      automerge: true,
+      addLabels: ["automerge"],
+    },
+    {
+      groupName: "Go dependencies (non-major)",
+      matchDepTypes: ["golang"],
+      matchUpdateTypes: ["patch", "minor"],
+    },
+    {
+      matchDatasources: ["go"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "all go updates (without major)",
+      groupSlug: "all-go",
+    },
+    {
+      matchDatasources: ["docker"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "all docker updates (without major)",
+      groupSlug: "all-docker",
+    },
+    {
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+      addLabels: ["github-actions"],
+    },
+  ],
+}

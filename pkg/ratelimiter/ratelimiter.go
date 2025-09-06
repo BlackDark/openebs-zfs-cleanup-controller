@@ -7,6 +7,7 @@ import (
 	"golang.org/x/time/rate"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // RateLimitedClient wraps a Kubernetes client with rate limiting capabilities
@@ -127,10 +128,10 @@ func (r *RateLimitedSubResourceClient) Patch(ctx context.Context, obj client.Obj
 }
 
 // ControllerRateLimiter creates a workqueue rate limiter for controller-runtime
-func ControllerRateLimiter(baseDelay time.Duration, maxDelay time.Duration) workqueue.RateLimiter {
-	return workqueue.NewMaxOfRateLimiter(
-		workqueue.NewItemExponentialFailureRateLimiter(baseDelay, maxDelay),
+func ControllerRateLimiter(baseDelay time.Duration, maxDelay time.Duration) workqueue.TypedRateLimiter[reconcile.Request] {
+	return workqueue.NewTypedMaxOfRateLimiter[reconcile.Request](
+		workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](baseDelay, maxDelay),
 		// 10 qps, 100 bucket size for overall rate limiting
-		&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+		&workqueue.TypedBucketRateLimiter[reconcile.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 	)
 }

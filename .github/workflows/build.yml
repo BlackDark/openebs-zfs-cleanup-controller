@@ -1,0 +1,122 @@
+name: Docker Builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+    tags:
+      - "v*.*.*"
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - ".github/**"
+      - ".vscode/**"
+      - "examples/**"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: openebs-zfs-cleanup-controller
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Get the repository's code
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Inject enhanced GitHub environment variables
+        uses: rlespinasse/github-slug-action@v5
+
+      # https://github.com/docker/setup-qemu-action
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5 # more recent
+
+      # https://github.com/docker/setup-buildx-action
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      # We push and build all types of images only when required
+      - name: Set build platforms
+        id: set_platforms
+        run: |
+          if [[ ${{ github.event_name }} == 'workflow_dispatch' ]]; then
+            echo "MANUAL_RUN=true" >> $GITHUB_OUTPUT
+          else
+            echo "MANUAL_RUN=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ ${{ github.event_name }} == 'workflow_dispatch' || ${{ github.ref }} == refs/tags/* ]]; then
+            echo "platforms=linux/amd64,linux/arm64" >> $GITHUB_OUTPUT
+            echo "push=true" >> $GITHUB_OUTPUT
+          else
+            echo "platforms=linux/amd64" >> $GITHUB_OUTPUT
+            echo "push=false" >> $GITHUB_OUTPUT
+          fi
+
+      #      - name: Available platforms
+      #        run: echo ${{ steps.buildx.outputs.platforms }}
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker meta for OpenEBS ZFS Cleanup Controller
+        id: meta_zfs_gc
+        uses: docker/metadata-action@v5
+        with:
+          # list of Docker images to use as base name for tags
+          images: |
+            ghcr.io/${{ github.repository_owner }}/{{ env.IMAGE_NAME }}
+            docker.io/${{ github.repository_owner }}/{{ env.IMAGE_NAME }},enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'false' }}
+          # generate Docker tags based on the following events/attributes
+          tags: |
+            type=ref,event=branch,prefix=dev-,enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'true' }}
+            type=schedule,enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'false' }}
+            type=ref,event=branch,enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'false' }}
+            type=semver,pattern={{version}},enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'false' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'false' }}
+            type=semver,pattern={{major}},enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'false' }}
+
+      - name: Build and push OpenEBS ZFS Cleanup Controller
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ steps.set_platforms.outputs.platforms }}
+          push: ${{ steps.set_platforms.outputs.push }}
+          tags: ${{ steps.meta_zfs_gc.outputs.tags }}
+          labels: ${{ steps.meta_zfs_gc.outputs.labels }}
+          build-args: |
+            ZFS_GC_VERSION=${{ env.GITHUB_REF_SLUG }}
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+      # - name: Docker Hub Description
+      #   if: github.event_name != 'pull_request'
+      #   uses: peter-evans/dockerhub-description@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      #     repository: ${{ github.repository_owner }}/openebs-zfs-cleanup-controller
+      #     readme-filepath: ./README.md
+      #     short-description: "OpenEBS ZFS Cleanup Controller for Kubernetes"

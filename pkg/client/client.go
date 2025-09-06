@@ -77,7 +77,7 @@ func NewManager(config ClientConfig) (ctrl.Manager, error) {
 		config.ProbeAddr = ":8081"
 	}
 	if config.LeaderElectionID == "" {
-		config.LeaderElectionID = "zfsvolume-cleanup-controller"
+		config.LeaderElectionID = "openebs-zfs-cleanup-controller"
 	}
 
 	mgr, err := ctrl.NewManager(config.Config, ctrl.Options{

@@ -63,6 +63,12 @@ test: fmt vet ## Run tests.
 build: fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
+.PHONY: build-versioned
+build-versioned: fmt vet ## Build manager binary with version information.
+	go build -o bin/manager \
+		-ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" \
+		cmd/main.go
+
 .PHONY: run
 run: fmt vet ## Run a controller from your host.
 	go run cmd/main.go

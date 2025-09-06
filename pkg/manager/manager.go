@@ -32,7 +32,7 @@ func NewControllerManager(cfg *config.Config, restConfig *rest.Config) (*Control
 		MetricsAddr:          fmt.Sprintf(":%d", cfg.MetricsPort),
 		ProbeAddr:            fmt.Sprintf(":%d", cfg.ProbePort),
 		EnableLeaderElection: cfg.EnableLeaderElection,
-		LeaderElectionID:     "zfsvolume-cleanup-controller",
+		LeaderElectionID:     "openebs-zfs-cleanup-controller",
 	}
 
 	mgr, err := clientpkg.NewManager(clientConfig)

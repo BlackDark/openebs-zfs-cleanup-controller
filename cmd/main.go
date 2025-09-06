@@ -25,6 +25,11 @@ import (
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
+
+	// Version information - can be set at build time using -ldflags
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
 func init() {
@@ -37,7 +42,7 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
-	var version string
+	var showVersion bool
 	var gracefulShutdownTimeout string
 	var timeout string
 
@@ -56,13 +61,21 @@ func main() {
 	flag.StringVar(&timeout, "timeout", "5m", "Maximum execution time for the cleanup job (cronjob mode only)")
 
 	// Common flags
-	flag.StringVar(&version, "version", "dev", "Version of the controller")
+	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
+
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("🚀 OpenEBS ZFS Cleanup Controller Version %s\n", version)
+		fmt.Printf("Commit: %s\n", commit)
+		fmt.Printf("Built: %s\n", date)
+		os.Exit(0)
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
