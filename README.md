@@ -3,8 +3,8 @@
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://golang.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker)](https://docker.com/)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-Compatible-326CE5?style=flat&logo=kubernetes)](https://kubernetes.io/)
-[![GitHub License](https://img.shields.io/github/license/blackdark93/openebs-zfs-cleanup-controller)](https://github.com/raydak-labs/configarr/blob/main/LICENSE)
-[![GitHub Release](https://img.shields.io/github/v/release/raydak-labs/configarr?logo=github)](https://github.com/blackdark/openebs-zfs-cleanup-controller/releases/)
+[![GitHub License](https://img.shields.io/github/license/blackdark93/openebs-zfs-cleanup-controller)](https://github.com/blackdark/openebs-zfs-cleanup-controller/blob/main/LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/blackdark/openebs-zfs-cleanup-controller?logo=github)](https://github.com/blackdark/openebs-zfs-cleanup-controller/releases/)
 [![Docker](https://img.shields.io/docker/v/blackdark93/openebs-zfs-cleanup-controller?sort=semver&label=DockerHub)](https://hub.docker.com/r/blackdark93/openebs-zfs-cleanup-controller)
 [![Docker Pulls](https://img.shields.io/docker/pulls/blackdark93/openebs-zfs-cleanup-controller?label=DockerHub-Pulls)](https://hub.docker.com/r/blackdark93/openebs-zfs-cleanup-controller)
 
