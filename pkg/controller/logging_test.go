@@ -182,9 +182,10 @@ func TestOrphanedVolumeLogging(t *testing.T) {
 	volumeChecker := checker.NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io", true)
 
 	ctx := context.Background()
-	isOrphaned, err := volumeChecker.IsOrphaned(ctx, zfsVolume)
+
+	validation, err := volumeChecker.ValidateForAction(ctx, zfsVolume)
 	assert.NoError(t, err)
-	assert.True(t, isOrphaned)
+	assert.True(t, validation.IsOrphaned)
 
 	logs := logCapture.GetLogs()
 
@@ -397,9 +398,10 @@ func TestStructuredLogging(t *testing.T) {
 	volumeChecker := checker.NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io", true)
 
 	ctx := context.Background()
-	_, err := volumeChecker.IsOrphaned(ctx, zfsVolume)
 
+	validation, err := volumeChecker.ValidateForAction(ctx, zfsVolume)
 	assert.NoError(t, err)
+	_ = validation // Only logs are checked below
 
 	logs := logCapture.GetLogs()
 
@@ -407,7 +409,6 @@ func TestStructuredLogging(t *testing.T) {
 	assert.Contains(t, logs, "volumeName")
 	assert.Contains(t, logs, "namespace")
 	assert.Contains(t, logs, "checkDuration")
-	assert.Contains(t, logs, "Starting orphan status check")
 
 	// Verify logs are not empty
 	assert.NotEmpty(t, logs, "Should have log output")

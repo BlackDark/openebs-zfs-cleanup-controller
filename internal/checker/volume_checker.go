@@ -14,512 +14,302 @@ import (
 	zfsv1 "github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/apis/zfs/v1"
 )
 
-// VolumeChecker handles the logic for determining if a ZFSVolume is orphaned
+const (
+	defaultCacheTTL = 5 * time.Minute
+	minVolumeAge    = 5 * time.Minute
+	zfsFinalizer    = "zfs.openebs.io/finalizer"
+	preserveAnn     = "zfs.openebs.io/preserve"
+)
+
+type volumeCache struct {
+	pv  map[string]*corev1.PersistentVolume      // CSI volumeHandle
+	pvc map[string]*corev1.PersistentVolumeClaim // namespace/name
+	ts  time.Time
+	ttl time.Duration
+}
+
 type VolumeChecker struct {
 	client.Client
 	logger          logr.Logger
 	dryRun          bool
 	pvLabelSelector string
-
-	// Caching fields for performance optimization
-	pvCache        map[string]*corev1.PersistentVolume      // keyed by CSI volumeHandle
-	pvcCache       map[string]*corev1.PersistentVolumeClaim // keyed by "namespace/name"
-	cacheTimestamp time.Time
-	cacheTTL       time.Duration
+	cache           *volumeCache
+	enableCaching   bool
 }
 
-// ValidationResult contains the result of safety validation checks
+// ValidationResult is the result of safety validation checks
 type ValidationResult struct {
 	IsSafe           bool
+	IsOrphaned       bool
 	Reason           string
 	ValidationErrors []string
 }
 
 // NewVolumeChecker creates a new VolumeChecker instance
 func NewVolumeChecker(client client.Client, logger logr.Logger, dryRun bool, pvLabelSelector string, enableCaching bool) *VolumeChecker {
-	vc := &VolumeChecker{
+	ttl := defaultCacheTTL
+	if !enableCaching {
+		ttl = 0
+	}
+	return &VolumeChecker{
 		Client:          client,
 		logger:          logger,
 		dryRun:          dryRun,
 		pvLabelSelector: pvLabelSelector,
-		pvCache:         make(map[string]*corev1.PersistentVolume),
-		pvcCache:        make(map[string]*corev1.PersistentVolumeClaim),
-		cacheTTL:        5 * time.Minute, // Cache for 5 minutes
+		enableCaching:   enableCaching,
+		cache: &volumeCache{
+			pv:  make(map[string]*corev1.PersistentVolume),
+			pvc: make(map[string]*corev1.PersistentVolumeClaim),
+			ttl: ttl,
+		},
 	}
-
-	// Disable caching if not enabled
-	if !enableCaching {
-		vc.cacheTTL = 0
-	}
-
-	return vc
 }
 
-// IsCacheValid checks if the current cache is still valid (not expired)
+// IsCachingEnabled returns true if caching is enabled
+func (vc *VolumeChecker) IsCachingEnabled() bool { return vc.enableCaching }
+
+// IsCacheValid returns true if the cache is still valid
 func (vc *VolumeChecker) IsCacheValid() bool {
-	if vc.cacheTimestamp.IsZero() {
+	if vc.cache == nil || vc.cache.ts.IsZero() {
 		return false
 	}
-	return time.Since(vc.cacheTimestamp) < vc.cacheTTL
+	return time.Since(vc.cache.ts) < vc.cache.ttl
 }
 
-// ClearCache invalidates the current cache
+// ClearCache invalidates the cache
 func (vc *VolumeChecker) ClearCache() {
-	vc.pvCache = make(map[string]*corev1.PersistentVolume)
-	vc.pvcCache = make(map[string]*corev1.PersistentVolumeClaim)
-	vc.cacheTimestamp = time.Time{}
-	vc.logger.V(1).Info("Cache cleared")
+	if vc.cache != nil {
+		vc.cache.pv = make(map[string]*corev1.PersistentVolume)
+		vc.cache.pvc = make(map[string]*corev1.PersistentVolumeClaim)
+		vc.cache.ts = time.Time{}
+	}
 }
 
-// PopulateCache loads all PVs and PVCs into memory for fast lookups
+// PopulateCache loads all PVs and PVCs into memory
 func (vc *VolumeChecker) PopulateCache(ctx context.Context) error {
-       startTime := time.Now()
-       logger := vc.logger.WithValues("cachePopulationID", time.Now().UnixNano())
-
-       logger.Info("Starting cache population for PVs and PVCs")
-
-       // Clear existing cache
-       vc.ClearCache()
-
-       // Detect if client is a cache client by checking for known type
-       isCacheClient := true // controller-runtime always injects a cache client by default
-
-       // Populate PV cache
-       if err := vc.populatePVCacheNoPagination(ctx, logger, isCacheClient); err != nil {
-	       logger.Error(err, "Failed to populate PV cache")
-	       return fmt.Errorf("failed to populate PV cache: %w", err)
-       }
-
-       // Populate PVC cache
-       if err := vc.populatePVCCacheNoPagination(ctx, logger, isCacheClient); err != nil {
-	       logger.Error(err, "Failed to populate PVC cache")
-	       return fmt.Errorf("failed to populate PVC cache: %w", err)
-       }
-
-       vc.cacheTimestamp = time.Now()
-       duration := time.Since(startTime)
-
-       logger.Info("Cache population completed",
-	       "pvCount", len(vc.pvCache),
-	       "pvcCount", len(vc.pvcCache),
-	       "duration", duration,
-	       "cacheTTL", vc.cacheTTL)
-
-       return nil
+	start := time.Now()
+	logger := vc.logger.WithValues("cachePopulationID", time.Now().UnixNano())
+	vc.ClearCache()
+	if err := vc.populatePVCache(ctx, logger); err != nil {
+		return fmt.Errorf("populate PV cache: %w", err)
+	}
+	if err := vc.populatePVCCache(ctx, logger); err != nil {
+		return fmt.Errorf("populate PVC cache: %w", err)
+	}
+	vc.cache.ts = time.Now()
+	logger.V(1).Info("Cache populated", "pvCount", len(vc.cache.pv), "pvcCount", len(vc.cache.pvc), "duration", time.Since(start))
+	return nil
 }
 
-// populatePVCacheNoPagination loads all PVs into the cache, avoiding pagination if using cache client
-func (vc *VolumeChecker) populatePVCacheNoPagination(ctx context.Context, logger logr.Logger, isCacheClient bool) error {
-       pvList := &corev1.PersistentVolumeList{}
-       listOpts := []client.ListOption{}
-       if vc.pvLabelSelector != "" {
-	       selector, err := labels.Parse(vc.pvLabelSelector)
-	       if err != nil {
-		       logger.Error(err, "Failed to parse PV label selector for cache, using all PVs",
-			       "selector", vc.pvLabelSelector)
-	       } else {
-		       listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
-	       }
-       }
-       // If using cache client, do a full list (no pagination)
-       if err := vc.List(ctx, pvList, listOpts...); err != nil {
-	       return fmt.Errorf("failed to list PVs for cache: %w", err)
-       }
-       for i, pv := range pvList.Items {
-	       if pv.Spec.CSI != nil {
-		       volumeHandle := pv.Spec.CSI.VolumeHandle
-		       if volumeHandle != "" {
-			       vc.pvCache[volumeHandle] = &pvList.Items[i]
-		       }
-	       }
-       }
-       logger.V(1).Info("PV cache populated",
-	       "totalPVs", len(pvList.Items),
-	       "cachedPVs", len(vc.pvCache))
-       return nil
-}
-
-// populatePVCCacheNoPagination loads all PVCs into the cache, avoiding pagination if using cache client
-func (vc *VolumeChecker) populatePVCCacheNoPagination(ctx context.Context, logger logr.Logger, isCacheClient bool) error {
-       pvcList := &corev1.PersistentVolumeClaimList{}
-       // If using cache client, do a full list (no pagination)
-       if err := vc.List(ctx, pvcList); err != nil {
-	       return fmt.Errorf("failed to list PVCs for cache: %w", err)
-       }
-       for i, pvc := range pvcList.Items {
-	       key := fmt.Sprintf("%s/%s", pvc.Namespace, pvc.Name)
-	       vc.pvcCache[key] = &pvcList.Items[i]
-       }
-       logger.V(1).Info("PVC cache populated",
-	       "totalPVCs", len(pvcList.Items),
-	       "cachedPVCs", len(vc.pvcCache))
-       return nil
-}
-
-// CachedFindRelatedPV finds PV using cache (populates cache if needed)
-func (vc *VolumeChecker) CachedFindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVolume) (*corev1.PersistentVolume, error) {
-	logger := vc.logger.WithValues("zfsvolume", zfsVol.Name, "namespace", zfsVol.Namespace)
-
-	// Check if cache needs to be populated or refreshed
-	if !vc.IsCacheValid() {
-		logger.V(1).Info("Cache invalid or empty, populating cache")
-		if err := vc.PopulateCache(ctx); err != nil {
-			logger.Error(err, "Failed to populate cache, falling back to direct API calls")
-			return vc.FindRelatedPV(ctx, zfsVol)
+func (vc *VolumeChecker) populatePVCache(ctx context.Context, logger logr.Logger) error {
+	pvList := &corev1.PersistentVolumeList{}
+	opts := []client.ListOption{}
+	if vc.pvLabelSelector != "" {
+		if selector, err := labels.Parse(vc.pvLabelSelector); err == nil {
+			opts = append(opts, client.MatchingLabelsSelector{Selector: selector})
 		}
 	}
-
-	// First, try CSI volumeHandle matching (primary method)
-	if pv, exists := vc.pvCache[zfsVol.Name]; exists {
-		logger.V(1).Info("Found PV in cache via CSI volumeHandle",
-			"pv", pv.Name,
-			"cacheHit", true,
-			"matchType", "csi_volumeHandle")
-		return pv, nil
+	if err := vc.List(ctx, pvList, opts...); err != nil {
+		return err
 	}
+	for i := range pvList.Items {
+		pv := &pvList.Items[i]
+		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle != "" {
+			vc.cache.pv[pv.Spec.CSI.VolumeHandle] = pv
+		}
+	}
+	return nil
+}
 
-	// Second, try direct name matching as fallback
-	for _, pv := range vc.pvCache {
+func (vc *VolumeChecker) populatePVCCache(ctx context.Context, logger logr.Logger) error {
+	pvcList := &corev1.PersistentVolumeClaimList{}
+	if err := vc.List(ctx, pvcList); err != nil {
+		return err
+	}
+	for i := range pvcList.Items {
+		pvc := &pvcList.Items[i]
+		key := pvc.Namespace + "/" + pvc.Name
+		vc.cache.pvc[key] = pvc
+	}
+	return nil
+}
+
+// Unified PV lookup: tries cache if enabled, else direct
+func (vc *VolumeChecker) findRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVolume) (*corev1.PersistentVolume, string, error) {
+	if vc.IsCachingEnabled() {
+		if !vc.IsCacheValid() {
+			if err := vc.PopulateCache(ctx); err != nil {
+				return nil, "cache_error", err
+			}
+		}
+		if pv, ok := vc.cache.pv[zfsVol.Name]; ok {
+			return pv, "csi_volumeHandle", nil
+		}
+		for _, pv := range vc.cache.pv {
+			if pv.Name == zfsVol.Name {
+				return pv, "direct_name", nil
+			}
+		}
+		return nil, "not_found", nil
+	}
+	// fallback to direct
+	pv, err := vc.FindRelatedPV(ctx, zfsVol)
+	if pv != nil {
+		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle == zfsVol.Name {
+			return pv, "csi_volumeHandle", nil
+		}
 		if pv.Name == zfsVol.Name {
-			logger.V(1).Info("Found PV in cache via direct name matching",
-				"pv", pv.Name,
-				"cacheHit", true,
-				"matchType", "direct_name")
-			return pv, nil
+			return pv, "direct_name", nil
 		}
 	}
-
-	logger.V(1).Info("PV not found in cache",
-		"cacheSize", len(vc.pvCache),
-		"cacheHit", false)
-	return nil, nil
+	return nil, "not_found", err
 }
 
-// CachedFindRelatedPVC finds PVC using cache
-func (vc *VolumeChecker) CachedFindRelatedPVC(ctx context.Context, pv *corev1.PersistentVolume) (*corev1.PersistentVolumeClaim, error) {
-	logger := vc.logger.WithValues("pv", pv.Name)
-
-	// Check if PV has a claimRef
+func (vc *VolumeChecker) findRelatedPVC(ctx context.Context, pv *corev1.PersistentVolume) (*corev1.PersistentVolumeClaim, error) {
 	if pv.Spec.ClaimRef == nil {
-		logger.V(1).Info("PV has no claimRef")
 		return nil, nil
 	}
-
-	claimRef := pv.Spec.ClaimRef
-	key := fmt.Sprintf("%s/%s", claimRef.Namespace, claimRef.Name)
-
-	// Lookup in cache
-	if pvc, exists := vc.pvcCache[key]; exists {
-		logger.V(1).Info("Found PVC in cache",
-			"pvc", pvc.Name,
-			"namespace", pvc.Namespace,
-			"cacheHit", true)
-		return pvc, nil
-	}
-
-	logger.V(1).Info("PVC not found in cache",
-		"pvcKey", key,
-		"cacheSize", len(vc.pvcCache),
-		"cacheHit", false)
-	return nil, nil
-}
-
-// IsOrphaned determines if a ZFSVolume is orphaned (no associated PV or PVC)
-// Enhanced logging for Requirements 4.2 (processing details) and 4.3 (orphaned volume details)
-func (vc *VolumeChecker) IsOrphaned(ctx context.Context, zfsVol *zfsv1.ZFSVolume) (bool, error) {
-	startTime := time.Now()
-	logger := vc.logger.WithValues(
-		"zfsvolume", zfsVol.Name,
-		"namespace", zfsVol.Namespace,
-		"orphanCheckID", time.Now().UnixNano())
-
-	// Debug: Print PV cache keys and info
-	if logger.V(2).Enabled() {
-		pvNames := make([]string, 0, len(vc.pvCache))
-		pvHandles := make([]string, 0, len(vc.pvCache))
-		for _, pv := range vc.pvCache {
-			pvNames = append(pvNames, pv.Name)
-			if pv.Spec.CSI != nil {
-				pvHandles = append(pvHandles, pv.Spec.CSI.VolumeHandle)
+	key := pv.Spec.ClaimRef.Namespace + "/" + pv.Spec.ClaimRef.Name
+	if vc.IsCachingEnabled() {
+		if !vc.IsCacheValid() {
+			if err := vc.PopulateCache(ctx); err != nil {
+				return nil, err
 			}
 		}
-		logger.Info("PV cache debug", "pvCacheKeys", pvNames, "pvCacheHandles", pvHandles)
-	}
-
-	// Enhanced startup logging - Requirement 4.2
-	logger.V(1).Info("Starting orphan status check for ZFSVolume",
-		"volumeName", zfsVol.Name,
-		"namespace", zfsVol.Namespace,
-		"createdAt", zfsVol.CreationTimestamp,
-		"age", time.Since(zfsVol.CreationTimestamp.Time).String())
-
-	// First, try to find a related PV
-	logger.V(1).Info("Searching for related PersistentVolume")
-	pv, err := vc.CachedFindRelatedPV(ctx, zfsVol)
-	if logger.V(2).Enabled() {
-		if pv != nil {
-			logger.Info("PV match debug", "matchedPVName", pv.Name, "matchedPVHandle", func() string {
-				if pv.Spec.CSI != nil {
-					return pv.Spec.CSI.VolumeHandle
-				} else {
-					return "<none>"
-				}
-			}())
-		} else {
-			logger.Info("PV match debug", "matchedPVName", nil)
+		if pvc, ok := vc.cache.pvc[key]; ok {
+			return pvc, nil
 		}
+		return nil, nil
 	}
-	if err != nil {
-		// Enhanced error logging - Requirement 4.5
-		logger.Error(err, "Failed to check for related PV",
-			"error", err.Error(),
-			"context", "PV relationship check",
-			"checkDuration", time.Since(startTime))
-		return false, fmt.Errorf("failed to check for related PV: %w", err)
-	}
+	return vc.FindRelatedPVC(ctx, pv)
+}
 
-	// If no PV found, the ZFSVolume is orphaned
+// ValidateForAction performs all safety checks and returns a ValidationResult including orphan status
+func (vc *VolumeChecker) ValidateForAction(ctx context.Context, zfsVol *zfsv1.ZFSVolume) (*ValidationResult, error) {
+	logger := vc.logger.WithValues("zfsvolume", zfsVol.Name, "namespace", zfsVol.Namespace, "validationID", time.Now().UnixNano())
+	logger.V(1).Info("Starting safety validation for ZFSVolume action", "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace, "createdAt", zfsVol.CreationTimestamp, "age", time.Since(zfsVol.CreationTimestamp.Time).String(), "finalizers", zfsVol.Finalizers, "annotations", zfsVol.Annotations, "deletionTimestamp", zfsVol.DeletionTimestamp)
+
+	// Orphan check (internal, not exposed)
+	start := time.Now()
+	pv, _, err := vc.findRelatedPV(ctx, zfsVol)
+	if err != nil {
+		logger.Error(err, "Failed to check for related PV", "error", err.Error(), "context", "PV relationship check", "checkDuration", time.Since(start))
+		return nil, fmt.Errorf("failed to check for related PV: %w", err)
+	}
+	isOrphaned := false
 	if pv == nil {
-		// Enhanced orphaned logging - Requirement 4.3
-		logger.Info("No related PV found, ZFSVolume is orphaned",
-			"status", "ORPHANED",
-			"reason", "no related PersistentVolume found",
-			"volumeName", zfsVol.Name,
-			"namespace", zfsVol.Namespace,
-			"checkDuration", time.Since(startTime))
-		return true, nil
+		logger.V(0).Info("No related PV found, ZFSVolume is orphaned", "status", "ORPHANED", "reason", "no related PersistentVolume found", "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace, "checkDuration", time.Since(start))
+		isOrphaned = true
+	} else {
+		logger.V(1).Info("Found related PV, checking for PVC", "pv", pv.Name, "pvPhase", pv.Status.Phase, "pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy, "pvClaimRef", pv.Spec.ClaimRef, "checkDuration", time.Since(start))
+		pvc, err := vc.findRelatedPVC(ctx, pv)
+		if err != nil {
+			logger.Error(err, "Failed to check for related PVC", "pv", pv.Name, "error", err.Error(), "context", "PVC relationship check", "checkDuration", time.Since(start))
+			return nil, fmt.Errorf("failed to check for related PVC: %w", err)
+		}
+		if pvc == nil {
+			logger.V(0).Info("No related PVC found for PV, ZFSVolume is orphaned", "status", "ORPHANED", "reason", "PV exists but no related PersistentVolumeClaim found", "pv", pv.Name, "pvPhase", pv.Status.Phase, "pvClaimRef", pv.Spec.ClaimRef, "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace, "checkDuration", time.Since(start))
+			isOrphaned = true
+		} else {
+			logger.V(1).Info("Found related PVC, ZFSVolume is not orphaned", "status", "NOT_ORPHANED", "reason", "active PV and PVC references found", "pv", pv.Name, "pvPhase", pv.Status.Phase, "pvc", pvc.Name, "pvcNamespace", pvc.Namespace, "pvcPhase", pvc.Status.Phase, "volumeName", zfsVol.Name, "checkDuration", time.Since(start))
+		}
 	}
 
-	// Enhanced PV found logging - Requirement 4.2
-	logger.Info("Found related PV, checking for PVC",
-		"pv", pv.Name,
-		"pvPhase", pv.Status.Phase,
-		"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
-		"pvClaimRef", pv.Spec.ClaimRef,
-		"checkDuration", time.Since(startTime))
-
-	// If PV exists, check if it has a related PVC
-	logger.V(1).Info("Searching for related PersistentVolumeClaim")
-	pvc, err := vc.CachedFindRelatedPVC(ctx, pv)
-	if err != nil {
-		// Enhanced error logging - Requirement 4.5
-		logger.Error(err, "Failed to check for related PVC",
-			"pv", pv.Name,
-			"error", err.Error(),
-			"context", "PVC relationship check",
-			"checkDuration", time.Since(startTime))
-		return false, fmt.Errorf("failed to check for related PVC: %w", err)
+	result := &ValidationResult{IsSafe: true, IsOrphaned: isOrphaned, ValidationErrors: []string{}}
+	validations := []validationFunc{
+		orphanedValidation(isOrphaned),
+		finalizerValidation,
+		deletionTimestampValidation,
+		ageValidation,
+		preserveAnnotationValidation,
 	}
-
-	// If no PVC found, the ZFSVolume is orphaned
-	if pvc == nil {
-		// Enhanced orphaned logging - Requirement 4.3
-		logger.Info("No related PVC found for PV, ZFSVolume is orphaned",
-			"status", "ORPHANED",
-			"reason", "PV exists but no related PersistentVolumeClaim found",
-			"pv", pv.Name,
-			"pvPhase", pv.Status.Phase,
-			"pvClaimRef", pv.Spec.ClaimRef,
-			"volumeName", zfsVol.Name,
-			"namespace", zfsVol.Namespace,
-			"checkDuration", time.Since(startTime))
-		return true, nil
+	for _, v := range validations {
+		if !v(zfsVol, result, logger) {
+			break
+		}
 	}
-
-	// Enhanced not orphaned logging - Requirement 4.2
-	logger.Info("Found related PVC, ZFSVolume is not orphaned",
-		"status", "NOT_ORPHANED",
-		"reason", "active PV and PVC references found",
-		"pv", pv.Name,
-		"pvPhase", pv.Status.Phase,
-		"pvc", pvc.Name,
-		"pvcNamespace", pvc.Namespace,
-		"pvcPhase", pvc.Status.Phase,
-		"volumeName", zfsVol.Name,
-		"checkDuration", time.Since(startTime))
-	return false, nil
+	if result.IsSafe {
+		result.Reason = "All safety checks passed"
+		logger.V(0).Info("ZFSVolume passed all safety validation checks", "validationResult", "PASSED", "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace)
+	} else {
+		logger.V(0).Info("ZFSVolume failed safety validation checks", "validationResult", "FAILED", "failureReason", result.Reason, "validationErrors", result.ValidationErrors, "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace)
+	}
+	return result, nil
 }
 
-// ValidateForDeletion performs safety checks before allowing a ZFSVolume to be deleted
-// Enhanced logging for Requirements 4.2 (processing details) and 4.5 (error details)
-func (vc *VolumeChecker) ValidateForDeletion(ctx context.Context, zfsVol *zfsv1.ZFSVolume) (*ValidationResult, error) {
-	startTime := time.Now()
-	logger := vc.logger.WithValues(
-		"zfsvolume", zfsVol.Name,
-		"namespace", zfsVol.Namespace,
-		"validationID", time.Now().UnixNano())
+// Composable validation
+type validationFunc func(*zfsv1.ZFSVolume, *ValidationResult, logr.Logger) bool
 
-	// Enhanced validation startup logging - Requirement 4.2
-	logger.Info("Starting safety validation for ZFSVolume deletion",
-		"volumeName", zfsVol.Name,
-		"namespace", zfsVol.Namespace,
-		"createdAt", zfsVol.CreationTimestamp,
-		"age", time.Since(zfsVol.CreationTimestamp.Time).String(),
-		"finalizers", zfsVol.Finalizers,
-		"annotations", zfsVol.Annotations,
-		"deletionTimestamp", zfsVol.DeletionTimestamp)
-
-	result := &ValidationResult{
-		IsSafe:           true,
-		ValidationErrors: []string{},
-	}
-
-	validationChecks := []string{}
-
-	// First check if the ZFSVolume is orphaned to determine finalizer handling
-	logger.V(1).Info("Verifying orphan status for validation")
-	isOrphaned, err := vc.IsOrphaned(ctx, zfsVol)
-	if err != nil {
-		// Enhanced error logging - Requirement 4.5
-		logger.Error(err, "Failed to verify orphan status during validation",
-			"error", err.Error(),
-			"context", "orphan status verification",
-			"validationDuration", time.Since(startTime))
-		return nil, fmt.Errorf("failed to verify orphan status: %w", err)
-	}
-
-	validationChecks = append(validationChecks, fmt.Sprintf("orphan_status_check:passed(orphaned=%t)", isOrphaned))
-
-	// If not orphaned, this is always unsafe, so return immediately
-	if !isOrphaned {
-		result.IsSafe = false
-		result.Reason = "ZFSVolume is not orphaned"
-		result.ValidationErrors = append(result.ValidationErrors, "volume has active PV or PVC references")
-		logger.Info("ZFSVolume is not orphaned, not safe to delete",
-			"validationResult", "FAILED")
-		_ = append(validationChecks, "orphan_check:FAILED")
-		return result, nil
-	} else {
-		validationChecks = append(validationChecks, "orphan_check:passed")
-	}
-
-	// Only check finalizers if the volume is orphaned
-	if len(zfsVol.Finalizers) > 0 {
-		logger.V(1).Info("Checking finalizers for blocking conditions",
-			"totalFinalizers", len(zfsVol.Finalizers),
-			"finalizers", zfsVol.Finalizers,
-			"isOrphaned", isOrphaned)
-
-		// Filter out zfs.openebs.io/finalizer if the volume is orphaned
-		blockingFinalizers := []string{}
-		ignoredFinalizers := []string{}
-
-		for _, finalizer := range zfsVol.Finalizers {
-			if finalizer == "zfs.openebs.io/finalizer" {
-				// Skip this finalizer for orphaned volumes
-				ignoredFinalizers = append(ignoredFinalizers, finalizer)
-				logger.Info("Ignoring zfs.openebs.io/finalizer for orphaned volume",
-					"finalizer", finalizer,
-					"reason", "volume is orphaned")
-				continue
-			}
-			blockingFinalizers = append(blockingFinalizers, finalizer)
-		}
-
-		if len(blockingFinalizers) > 0 {
+func orphanedValidation(isOrphaned bool) validationFunc {
+	return func(_ *zfsv1.ZFSVolume, result *ValidationResult, logger logr.Logger) bool {
+		if !isOrphaned {
 			result.IsSafe = false
-			result.Reason = "ZFSVolume has finalizers that must be handled first"
-			result.ValidationErrors = append(result.ValidationErrors, fmt.Sprintf("blocking finalizers present: %v", blockingFinalizers))
-			logger.Info("ZFSVolume has blocking finalizers, not safe to delete",
-				"blockingFinalizers", blockingFinalizers,
-				"ignoredFinalizers", ignoredFinalizers,
-				"validationResult", "FAILED")
+			result.Reason = "ZFSVolume is not orphaned"
+			result.ValidationErrors = append(result.ValidationErrors, "volume has active PV or PVC references")
+			logger.V(0).Info("ZFSVolume is not orphaned, not safe to delete", "validationResult", "FAILED")
+			return false
 		}
-		validationChecks = append(validationChecks, fmt.Sprintf("finalizer_check:blocking=%d,ignored=%d", len(blockingFinalizers), len(ignoredFinalizers)))
-	} else {
-		validationChecks = append(validationChecks, "finalizer_check:none")
+		return true
 	}
+}
 
-	// Check if the ZFSVolume is being deleted already
+func finalizerValidation(zfsVol *zfsv1.ZFSVolume, result *ValidationResult, logger logr.Logger) bool {
+	if len(zfsVol.Finalizers) == 0 {
+		return true
+	}
+	blocking := []string{}
+	for _, f := range zfsVol.Finalizers {
+		if f != zfsFinalizer {
+			blocking = append(blocking, f)
+		}
+	}
+	if len(blocking) > 0 {
+		result.IsSafe = false
+		result.Reason = "ZFSVolume has finalizers that must be handled first"
+		result.ValidationErrors = append(result.ValidationErrors, fmt.Sprintf("blocking finalizers present: %v", blocking))
+		logger.V(0).Info("ZFSVolume has blocking finalizers, not safe to delete", "blockingFinalizers", blocking, "validationResult", "FAILED")
+		return false
+	}
+	return true
+}
+
+func deletionTimestampValidation(zfsVol *zfsv1.ZFSVolume, result *ValidationResult, logger logr.Logger) bool {
 	if zfsVol.DeletionTimestamp != nil {
 		result.IsSafe = false
 		result.Reason = "ZFSVolume is already being deleted"
 		result.ValidationErrors = append(result.ValidationErrors, fmt.Sprintf("deletion timestamp: %v", zfsVol.DeletionTimestamp))
-		logger.Info("ZFSVolume is already being deleted",
-			"deletionTimestamp", zfsVol.DeletionTimestamp,
-			"validationResult", "FAILED")
-		validationChecks = append(validationChecks, "deletion_timestamp_check:FAILED")
-	} else {
-		validationChecks = append(validationChecks, "deletion_timestamp_check:passed")
+		logger.V(0).Info("ZFSVolume is already being deleted", "deletionTimestamp", zfsVol.DeletionTimestamp, "validationResult", "FAILED")
+		return false
 	}
+	return true
+}
 
-	// Check if the ZFSVolume is too new (created within the last 5 minutes)
-	// This prevents accidental deletion of recently created volumes
-	volumeAge := time.Since(zfsVol.CreationTimestamp.Time)
-	minAge := 5 * time.Minute
-	if volumeAge < minAge {
+func ageValidation(zfsVol *zfsv1.ZFSVolume, result *ValidationResult, logger logr.Logger) bool {
+	age := time.Since(zfsVol.CreationTimestamp.Time)
+	if age < minVolumeAge {
 		result.IsSafe = false
 		result.Reason = "ZFSVolume is too new (created within last 5 minutes)"
 		result.ValidationErrors = append(result.ValidationErrors, fmt.Sprintf("created at: %v", zfsVol.CreationTimestamp))
-		logger.Info("ZFSVolume is too new, not safe to delete",
-			"creationTimestamp", zfsVol.CreationTimestamp,
-			"age", volumeAge.String(),
-			"minimumAge", minAge.String(),
-			"validationResult", "FAILED")
-		validationChecks = append(validationChecks, fmt.Sprintf("age_check:FAILED(age=%s,min=%s)", volumeAge.String(), minAge.String()))
-	} else {
-		validationChecks = append(validationChecks, fmt.Sprintf("age_check:passed(age=%s)", volumeAge.String()))
+		logger.V(0).Info("ZFSVolume is too new, not safe to delete", "creationTimestamp", zfsVol.CreationTimestamp, "age", age.String(), "minimumAge", minVolumeAge.String(), "validationResult", "FAILED")
+		return false
 	}
+	return true
+}
 
-	// Check if the ZFSVolume has any annotations that indicate it should be preserved
+func preserveAnnotationValidation(zfsVol *zfsv1.ZFSVolume, result *ValidationResult, logger logr.Logger) bool {
 	if zfsVol.Annotations != nil {
-		if preserveAnnotation, exists := zfsVol.Annotations["zfs.openebs.io/preserve"]; exists && preserveAnnotation == "true" {
+		if v, ok := zfsVol.Annotations[preserveAnn]; ok && v == "true" {
 			result.IsSafe = false
 			result.Reason = "ZFSVolume has preserve annotation set to true"
 			result.ValidationErrors = append(result.ValidationErrors, "preserve annotation is set")
-			logger.Info("ZFSVolume has preserve annotation, not safe to delete",
-				"preserveAnnotation", preserveAnnotation,
-				"validationResult", "FAILED")
-			validationChecks = append(validationChecks, "preserve_annotation_check:FAILED")
-		} else {
-			validationChecks = append(validationChecks, "preserve_annotation_check:passed")
+			logger.V(0).Info("ZFSVolume has preserve annotation, not safe to delete", "preserveAnnotation", v, "validationResult", "FAILED")
+			return false
 		}
-	} else {
-		validationChecks = append(validationChecks, "preserve_annotation_check:passed(no_annotations)")
 	}
-
-	// Check if the volume is not orphaned (we already checked this above)
-	if !isOrphaned {
-		result.IsSafe = false
-		result.Reason = "ZFSVolume is not orphaned"
-		result.ValidationErrors = append(result.ValidationErrors, "volume has active PV or PVC references")
-		logger.Info("ZFSVolume is not orphaned, not safe to delete",
-			"validationResult", "FAILED")
-		_ = append(validationChecks, "orphan_check:FAILED")
-		// If not orphaned, this is always unsafe, so return immediately
-		return result, nil
-	} else {
-		validationChecks = append(validationChecks, "orphan_check:passed")
-	}
-
-	validationDuration := time.Since(startTime)
-
-	if result.IsSafe {
-		result.Reason = "All safety checks passed"
-		// Enhanced success logging - Requirement 4.2
-		logger.Info("ZFSVolume passed all safety validation checks",
-			"validationResult", "PASSED",
-			"validationDuration", validationDuration,
-			"checksPerformed", validationChecks,
-			"volumeName", zfsVol.Name,
-			"namespace", zfsVol.Namespace)
-	} else {
-		// Enhanced failure logging - Requirement 4.2, 4.5
-		logger.Info("ZFSVolume failed safety validation checks",
-			"validationResult", "FAILED",
-			"failureReason", result.Reason,
-			"validationErrors", result.ValidationErrors,
-			"validationDuration", validationDuration,
-			"checksPerformed", validationChecks,
-			"volumeName", zfsVol.Name,
-			"namespace", zfsVol.Namespace)
-	}
-
-	return result, nil
+	return true
 }
 
 // LogDeletionAction logs what would happen in dry-run mode or what is happening in real mode
-// Enhanced logging for Requirements 4.6 (dry-run indicators) and 4.3 (orphaned volume details)
 func (vc *VolumeChecker) LogDeletionAction(zfsVol *zfsv1.ZFSVolume, validation *ValidationResult) {
 	logger := vc.logger.WithValues(
 		"zfsvolume", zfsVol.Name,
@@ -540,8 +330,7 @@ func (vc *VolumeChecker) LogDeletionAction(zfsVol *zfsv1.ZFSVolume, validation *
 
 	if vc.dryRun {
 		if validation.IsSafe {
-			// Enhanced dry-run success logging - Requirement 4.6
-			logger.Info("DRY-RUN: Would delete orphaned ZFSVolume",
+			logger.V(0).Info("DRY-RUN: Would delete orphaned ZFSVolume",
 				"mode", "DRY-RUN",
 				"action", "DELETE",
 				"status", "WOULD_DELETE",
@@ -549,8 +338,7 @@ func (vc *VolumeChecker) LogDeletionAction(zfsVol *zfsv1.ZFSVolume, validation *
 				"safetyValidation", "PASSED",
 				"volumeInfo", volumeInfo)
 		} else {
-			// Enhanced dry-run skip logging - Requirement 4.6
-			logger.Info("DRY-RUN: Would skip ZFSVolume deletion",
+			logger.V(0).Info("DRY-RUN: Would skip ZFSVolume deletion",
 				"mode", "DRY-RUN",
 				"action", "SKIP",
 				"status", "WOULD_SKIP",
@@ -561,8 +349,7 @@ func (vc *VolumeChecker) LogDeletionAction(zfsVol *zfsv1.ZFSVolume, validation *
 		}
 	} else {
 		if validation.IsSafe {
-			// Enhanced live deletion logging - Requirement 4.3, 4.4
-			logger.Info("Deleting orphaned ZFSVolume",
+			logger.V(0).Info("Deleting orphaned ZFSVolume",
 				"mode", "LIVE",
 				"action", "DELETE",
 				"status", "PROCEEDING",
@@ -570,8 +357,7 @@ func (vc *VolumeChecker) LogDeletionAction(zfsVol *zfsv1.ZFSVolume, validation *
 				"safetyValidation", "PASSED",
 				"volumeInfo", volumeInfo)
 		} else {
-			// Enhanced live skip logging - Requirement 4.3
-			logger.Info("Skipping ZFSVolume deletion due to safety validation",
+			logger.V(0).Info("Skipping ZFSVolume deletion due to safety validation",
 				"mode", "LIVE",
 				"action", "SKIP",
 				"status", "SKIPPED",
@@ -583,13 +369,12 @@ func (vc *VolumeChecker) LogDeletionAction(zfsVol *zfsv1.ZFSVolume, validation *
 	}
 }
 
-// IsDryRun returns whether the checker is in dry-run mode
+// IsDryRun returns true if dry-run mode is enabled
 func (vc *VolumeChecker) IsDryRun() bool {
 	return vc.dryRun
 }
 
 // FindRelatedPV finds the PersistentVolume related to a ZFSVolume via CSI volumeHandle
-// Enhanced logging for Requirements 4.2 (processing details) and 4.5 (error details)
 func (vc *VolumeChecker) FindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVolume) (*corev1.PersistentVolume, error) {
 	startTime := time.Now()
 	logger := vc.logger.WithValues(
@@ -597,114 +382,58 @@ func (vc *VolumeChecker) FindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVol
 		"namespace", zfsVol.Namespace,
 		"pvSearchID", time.Now().UnixNano())
 
-	// Enhanced search startup logging - Requirement 4.2
 	logger.V(1).Info("Starting search for related PersistentVolume",
 		"searchTarget", zfsVol.Name,
 		"searchMethod", "CSI volumeHandle matching",
 		"pvLabelSelector", vc.pvLabelSelector)
 
-	// Use pagination for efficient PV listing
-	const pageSize = 200 // Smaller page size for PVs as they're less numerous than ZFSVolumes
-	allPVs := make([]corev1.PersistentVolume, 0)
-	continueToken := ""
-
-	for {
-		// Create a fresh list for each page
-		pvList := &corev1.PersistentVolumeList{}
-		listOpts := []client.ListOption{client.Limit(pageSize)}
-		if continueToken != "" {
-			listOpts = append(listOpts, client.Continue(continueToken))
+	pvList := &corev1.PersistentVolumeList{}
+	listOpts := []client.ListOption{}
+	if vc.pvLabelSelector != "" {
+		selector, err := labels.Parse(vc.pvLabelSelector)
+		if err != nil {
+			logger.Error(err, "Failed to parse PV label selector, skipping filter",
+				"selector", vc.pvLabelSelector,
+				"error", err.Error())
+		} else {
+			listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
 		}
-
-		// Apply label selector if configured
-		if vc.pvLabelSelector != "" {
-			// Parse the label selector
-			selector, err := labels.Parse(vc.pvLabelSelector)
-			if err != nil {
-				logger.Error(err, "Failed to parse PV label selector, skipping filter",
-					"selector", vc.pvLabelSelector,
-					"error", err.Error())
-			} else {
-				listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
-			}
-		}
-
-		logger.V(2).Info("Listing PersistentVolumes from Kubernetes API",
-			"pageSize", pageSize,
-			"continueToken", continueToken,
-			"labelSelector", vc.pvLabelSelector)
-
-		if err := vc.List(ctx, pvList, listOpts...); err != nil {
-			// Enhanced error logging - Requirement 4.5
-			logger.Error(err, "Failed to list PersistentVolumes from Kubernetes API",
-				"error", err.Error(),
-				"context", "PV listing",
-				"searchDuration", time.Since(startTime))
-			return nil, fmt.Errorf("failed to list PersistentVolumes: %w", err)
-		}
-
-		// Add this page's items to our collection
-		allPVs = append(allPVs, pvList.Items...)
-
-		// Check if there are more pages
-		continueToken = pvList.GetContinue()
-		if continueToken == "" {
-			break // No more pages
-		}
-
-		logger.V(2).Info("Fetched page of PersistentVolumes",
-			"pageSize", len(pvList.Items),
-			"totalSoFar", len(allPVs),
-			"hasMorePages", continueToken != "")
+	}
+	if err := vc.List(ctx, pvList, listOpts...); err != nil {
+		logger.Error(err, "Failed to list PersistentVolumes from Kubernetes API",
+			"error", err.Error(),
+			"context", "PV listing",
+			"searchDuration", time.Since(startTime))
+		return nil, fmt.Errorf("failed to list PersistentVolumes: %w", err)
 	}
 
-	// Enhanced PV list logging - Requirement 4.2
-	logger.V(1).Info("Retrieved PersistentVolume list",
-		"totalPVs", len(allPVs),
+	logger.V(2).Info("Retrieved PersistentVolume list",
+		"totalPVs", len(pvList.Items),
 		"searchTarget", zfsVol.Name,
 		"listDuration", time.Since(startTime),
 		"labelSelector", vc.pvLabelSelector)
 
-	// Look for a PV with CSI volumeHandle matching the ZFSVolume name
-	for i, pv := range allPVs {
+	for i := range pvList.Items {
+		pv := &pvList.Items[i]
 		logger.V(2).Info("Examining PersistentVolume",
 			"pvIndex", i+1,
 			"pvName", pv.Name,
 			"pvPhase", pv.Status.Phase,
 			"hasCSI", pv.Spec.CSI != nil)
 
-		// First, try CSI volumeHandle matching
-		if pv.Spec.CSI != nil {
-			volumeHandle := pv.Spec.CSI.VolumeHandle
-			logger.V(2).Info("Checking CSI volumeHandle",
-				"pvName", pv.Name,
-				"volumeHandle", volumeHandle,
-				"targetVolume", zfsVol.Name,
-				"matches", volumeHandle == zfsVol.Name)
-
-			if volumeHandle == zfsVol.Name {
-				// Enhanced match found logging - Requirement 4.2
-				logger.Info("Found matching PV via CSI volumeHandle",
-					"pv", pv.Name,
-					"volumeHandle", volumeHandle,
-					"pvPhase", pv.Status.Phase,
-					"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
-					"pvClaimRef", pv.Spec.ClaimRef,
-					"searchDuration", time.Since(startTime),
-					"pvsExamined", i+1)
-				return &pv, nil
-			}
+		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle == zfsVol.Name {
+			logger.V(0).Info("Found matching PV via CSI volumeHandle",
+				"pv", pv.Name,
+				"volumeHandle", pv.Spec.CSI.VolumeHandle,
+				"pvPhase", pv.Status.Phase,
+				"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
+				"pvClaimRef", pv.Spec.ClaimRef,
+				"searchDuration", time.Since(startTime),
+				"pvsExamined", i+1)
+			return pv, nil
 		}
-
-		// Second, try direct name matching
-		logger.V(2).Info("Checking direct name matching",
-			"pvName", pv.Name,
-			"targetVolume", zfsVol.Name,
-			"matches", pv.Name == zfsVol.Name)
-
 		if pv.Name == zfsVol.Name {
-			// Enhanced match found logging - Requirement 4.2
-			logger.Info("Found matching PV via direct name matching",
+			logger.V(0).Info("Found matching PV via direct name matching",
 				"pv", pv.Name,
 				"pvPhase", pv.Status.Phase,
 				"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
@@ -712,78 +441,19 @@ func (vc *VolumeChecker) FindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVol
 				"searchMethod", "direct name matching",
 				"searchDuration", time.Since(startTime),
 				"pvsExamined", i+1)
-			return &pv, nil
+			return pv, nil
 		}
 	}
 
-	// If no PV found with label selector, try fallback: search all PVs without label filter
-	if vc.pvLabelSelector != "" {
-		logger.V(1).Info("No matching PV found with label selector, trying fallback search without label filter",
-			"originalSelector", vc.pvLabelSelector,
-			"searchTarget", zfsVol.Name)
-
-		// Search all PVs without label filter
-		fallbackPvList := &corev1.PersistentVolumeList{}
-		if err := vc.List(ctx, fallbackPvList); err != nil {
-			logger.Error(err, "Failed to list all PersistentVolumes for fallback search",
-				"error", err.Error(),
-				"context", "PV fallback listing")
-		} else {
-			logger.V(1).Info("Retrieved all PersistentVolumes for fallback search",
-				"totalPVs", len(fallbackPvList.Items),
-				"searchTarget", zfsVol.Name)
-
-			// Look for a PV with CSI volumeHandle matching the ZFSVolume name (fallback search)
-			for i, pv := range fallbackPvList.Items {
-				logger.V(2).Info("Fallback: Examining PersistentVolume",
-					"pvIndex", i+1,
-					"pvName", pv.Name,
-					"pvPhase", pv.Status.Phase,
-					"hasCSI", pv.Spec.CSI != nil)
-
-				if pv.Spec.CSI != nil {
-					volumeHandle := pv.Spec.CSI.VolumeHandle
-					logger.V(2).Info("Fallback: Checking CSI volumeHandle",
-						"pvName", pv.Name,
-						"volumeHandle", volumeHandle,
-						"targetVolume", zfsVol.Name,
-						"matches", volumeHandle == zfsVol.Name)
-
-					if volumeHandle == zfsVol.Name {
-						// Enhanced match found logging - Requirement 4.2
-						logger.Info("Found matching PV via fallback CSI volumeHandle matching",
-							"pv", pv.Name,
-							"volumeHandle", volumeHandle,
-							"pvPhase", pv.Status.Phase,
-							"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
-							"pvClaimRef", pv.Spec.ClaimRef,
-							"searchMethod", "fallback CSI volumeHandle matching",
-							"searchDuration", time.Since(startTime),
-							"pvsExamined", i+1)
-						return &pv, nil
-					}
-				}
-			}
-
-			logger.V(1).Info("No matching PV found in fallback search",
-				"searchTarget", zfsVol.Name,
-				"totalPVsExamined", len(fallbackPvList.Items),
-				"searchMethod", "fallback CSI volumeHandle matching",
-				"result", "no match")
-		}
-	}
-
-	// Enhanced no match logging - Requirement 4.2
 	logger.V(1).Info("No matching PV found",
 		"searchTarget", zfsVol.Name,
-		"totalPVsExamined", len(allPVs),
+		"totalPVsExamined", len(pvList.Items),
 		"searchDuration", time.Since(startTime),
 		"result", "no match")
 	return nil, nil
 }
 
 // FindRelatedPVC finds the PersistentVolumeClaim related to a PersistentVolume via claimRef
-// Enhanced logging for Requirements 4.2 (processing details) and 4.5 (error details)
 func (vc *VolumeChecker) FindRelatedPVC(ctx context.Context, pv *corev1.PersistentVolume) (*corev1.PersistentVolumeClaim, error) {
 	startTime := time.Now()
 	logger := vc.logger.WithValues(
@@ -798,8 +468,7 @@ func (vc *VolumeChecker) FindRelatedPVC(ctx context.Context, pv *corev1.Persiste
 
 	// Check if PV has a claimRef
 	if pv.Spec.ClaimRef == nil {
-		// Enhanced no claimRef logging - Requirement 4.2
-		logger.Info("PV has no claimRef, no related PVC",
+		logger.V(0).Info("PV has no claimRef, no related PVC",
 			"pvName", pv.Name,
 			"pvPhase", pv.Status.Phase,
 			"result", "no claimRef",
@@ -809,7 +478,7 @@ func (vc *VolumeChecker) FindRelatedPVC(ctx context.Context, pv *corev1.Persiste
 
 	claimRef := pv.Spec.ClaimRef
 	// Enhanced claimRef found logging - Requirement 4.2
-	logger.Info("PV has claimRef, searching for PVC",
+	logger.V(1).Info("PV has claimRef, searching for PVC",
 		"pvName", pv.Name,
 		"pvcName", claimRef.Name,
 		"pvcNamespace", claimRef.Namespace,
@@ -823,13 +492,12 @@ func (vc *VolumeChecker) FindRelatedPVC(ctx context.Context, pv *corev1.Persiste
 		Namespace: claimRef.Namespace,
 	}
 
-	logger.V(1).Info("Retrieving PVC from Kubernetes API",
+	logger.V(2).Info("Retrieving PVC from Kubernetes API",
 		"pvcKey", pvcKey.String())
 
 	if err := vc.Get(ctx, pvcKey, pvc); err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			// Enhanced PVC not found logging - Requirement 4.2
-			logger.Info("PVC referenced by PV not found",
+			logger.V(0).Info("PVC referenced by PV not found",
 				"pvName", pv.Name,
 				"pvcName", claimRef.Name,
 				"pvcNamespace", claimRef.Namespace,
@@ -837,7 +505,6 @@ func (vc *VolumeChecker) FindRelatedPVC(ctx context.Context, pv *corev1.Persiste
 				"searchDuration", time.Since(startTime))
 			return nil, nil
 		}
-		// Enhanced error logging - Requirement 4.5
 		logger.Error(err, "Failed to get PVC from Kubernetes API",
 			"pvName", pv.Name,
 			"pvcName", claimRef.Name,
@@ -849,7 +516,7 @@ func (vc *VolumeChecker) FindRelatedPVC(ctx context.Context, pv *corev1.Persiste
 	}
 
 	// Enhanced PVC found logging - Requirement 4.2
-	logger.Info("Found related PVC",
+	logger.V(1).Info("Found related PVC",
 		"pvName", pv.Name,
 		"pvcName", pvc.Name,
 		"pvcNamespace", pvc.Namespace,

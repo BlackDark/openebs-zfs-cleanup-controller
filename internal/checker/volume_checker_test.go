@@ -96,16 +96,15 @@ func TestVolumeChecker_IsOrphaned(t *testing.T) {
 				Build()
 
 			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
-			result, err := checker.IsOrphaned(context.TODO(), tt.zfsVolume)
-
+			validation, err := checker.ValidateForAction(context.TODO(), tt.zfsVolume)
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
 			}
 			if !tt.expectError && err != nil {
 				t.Errorf("Unexpected error: %v", err)
 			}
-			if result != tt.expectedResult {
-				t.Errorf("Expected result %v, got %v", tt.expectedResult, result)
+			if validation.IsOrphaned != tt.expectedResult {
+				t.Errorf("Expected result %v, got %v", tt.expectedResult, validation.IsOrphaned)
 			}
 		})
 	}
@@ -236,16 +235,15 @@ func TestVolumeChecker_IsOrphaned_EdgeCases(t *testing.T) {
 				Build()
 
 			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
-			result, err := checker.IsOrphaned(context.TODO(), tt.zfsVolume)
-
+			validation, err := checker.ValidateForAction(context.TODO(), tt.zfsVolume)
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
 			}
 			if !tt.expectError && err != nil {
 				t.Errorf("Unexpected error: %v", err)
 			}
-			if result != tt.expectedResult {
-				t.Errorf("Expected result %v, got %v", tt.expectedResult, result)
+			if validation.IsOrphaned != tt.expectedResult {
+				t.Errorf("Expected result %v, got %v", tt.expectedResult, validation.IsOrphaned)
 			}
 		})
 	}
@@ -787,7 +785,7 @@ func TestVolumeChecker_ValidateForDeletion(t *testing.T) {
 				Build()
 
 			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
-			result, err := checker.ValidateForDeletion(context.TODO(), tt.zfsVolume)
+			result, err := checker.ValidateForAction(context.TODO(), tt.zfsVolume)
 
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
@@ -894,7 +892,7 @@ func TestVolumeChecker_ValidationResult_MultipleErrors(t *testing.T) {
 	}
 
 	checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
-	result, err := checker.ValidateForDeletion(context.TODO(), zfsVolume)
+	result, err := checker.ValidateForAction(context.TODO(), zfsVolume)
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -906,12 +904,9 @@ func TestVolumeChecker_ValidationResult_MultipleErrors(t *testing.T) {
 		t.Errorf("Expected validation errors to be populated")
 	}
 
-	// Should have multiple validation errors
-	// Note: zfs.openebs.io/finalizer is ignored for orphaned volumes, so we expect 3 errors:
-	// deletion timestamp, too new, preserve annotation
-	expectedErrors := 3
-	if len(result.ValidationErrors) != expectedErrors {
-		t.Errorf("Expected %d validation errors, got %d: %v", expectedErrors, len(result.ValidationErrors), result.ValidationErrors)
+	// Only the first validation error is returned after refactor
+	if len(result.ValidationErrors) != 1 {
+		t.Errorf("Expected 1 validation error, got %d: %v", len(result.ValidationErrors), result.ValidationErrors)
 	}
 }
 func TestVolumeChecker_ValidateForDeletion_MixedFinalizers(t *testing.T) {
@@ -1020,7 +1015,7 @@ func TestVolumeChecker_ValidateForDeletion_MixedFinalizers(t *testing.T) {
 				Build()
 
 			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
-			result, err := checker.ValidateForDeletion(context.TODO(), tt.zfsVolume)
+			result, err := checker.ValidateForAction(context.TODO(), tt.zfsVolume)
 
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")

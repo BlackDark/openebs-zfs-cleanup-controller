@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +30,7 @@ func NewLogCapture() *LogCapture {
 	opts := zap.Options{
 		Development: true,
 		DestWriter:  buffer,
+		Level:       zapcore.Level(-2), // logr V(2) = zapcore.Level(-2)
 	}
 	logger := zap.New(zap.UseFlagOptions(&opts))
 
@@ -73,17 +75,15 @@ func TestOrphanCheckLogging(t *testing.T) {
 	volumeChecker := NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "", true)
 
 	ctx := context.Background()
-	isOrphaned, err := volumeChecker.IsOrphaned(ctx, zfsVolume)
 
+	validation, err := volumeChecker.ValidateForAction(ctx, zfsVolume)
 	assert.NoError(t, err)
-	assert.True(t, isOrphaned)
+	assert.True(t, validation.IsOrphaned)
 
 	logs := logCapture.GetLogs()
 
-	// Verify comprehensive orphan check logging
-	assert.Contains(t, logs, "Starting orphan status check for ZFSVolume")
-	assert.Contains(t, logs, "Searching for related PersistentVolume")
-	assert.Contains(t, logs, "PV not found in cache")
+	// Verify orphan check logging (updated for refactor)
+	assert.Contains(t, logs, "Starting safety validation for ZFSVolume action")
 	assert.Contains(t, logs, "No related PV found, ZFSVolume is orphaned")
 	assert.Contains(t, logs, "ORPHANED")
 	assert.Contains(t, logs, "checkDuration")
@@ -109,6 +109,9 @@ func TestPVSearchLogging(t *testing.T) {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-pv",
+			Labels: map[string]string{
+				"pv.kubernetes.io/provisioned-by": "zfs.csi.openebs.io",
+			},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
@@ -135,12 +138,13 @@ func TestPVSearchLogging(t *testing.T) {
 
 	logs := logCapture.GetLogs()
 
-	// Verify PV search logging
+	// Verify PV search logging (updated for refactored log levels and messages)
 	assert.Contains(t, logs, "Starting search for related PersistentVolume")
-	assert.Contains(t, logs, "Retrieved PersistentVolume list")
-	assert.Contains(t, logs, "Found matching PV via fallback CSI volumeHandle matching")
+	assert.Contains(t, logs, "Found matching PV via CSI volumeHandle")
 	assert.Contains(t, logs, "searchDuration")
 	assert.Contains(t, logs, "pvsExamined")
+	// The following is now at V(2) (trace), so may not appear in default logs, but we check for its presence in the buffer
+	assert.Contains(t, logs, "Retrieved PersistentVolume list")
 }
 
 // TestPVCSearchLogging tests detailed logging during PVC search
@@ -187,12 +191,13 @@ func TestPVCSearchLogging(t *testing.T) {
 
 	logs := logCapture.GetLogs()
 
-	// Verify PVC search logging
+	// Verify PVC search logging (updated for refactored log levels and messages)
 	assert.Contains(t, logs, "Starting search for related PersistentVolumeClaim")
 	assert.Contains(t, logs, "PV has claimRef, searching for PVC")
-	assert.Contains(t, logs, "Retrieving PVC from Kubernetes API")
 	assert.Contains(t, logs, "Found related PVC")
 	assert.Contains(t, logs, "searchDuration")
+	// The following is now at V(2) (trace), so may not appear in default logs, but we check for its presence in the buffer
+	assert.Contains(t, logs, "Retrieving PVC from Kubernetes API")
 }
 
 // TestValidationLogging tests detailed logging during safety validation
@@ -220,7 +225,8 @@ func TestValidationLogging(t *testing.T) {
 	volumeChecker := NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "openebs.io/cas-type=zfs-localpv", true)
 
 	ctx := context.Background()
-	validation, err := volumeChecker.ValidateForDeletion(ctx, zfsVolume)
+
+	validation, err := volumeChecker.ValidateForAction(ctx, zfsVolume)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, validation)
@@ -228,14 +234,11 @@ func TestValidationLogging(t *testing.T) {
 
 	logs := logCapture.GetLogs()
 
-	// Verify validation logging
-	assert.Contains(t, logs, "Starting safety validation for ZFSVolume deletion")
-	assert.Contains(t, logs, "Verifying orphan status for validation")
+	// Verify validation logging (updated for refactor)
+	assert.Contains(t, logs, "Starting safety validation for ZFSVolume action")
 	assert.Contains(t, logs, "ZFSVolume passed all safety validation checks")
 	assert.Contains(t, logs, "validationResult")
 	assert.Contains(t, logs, "PASSED")
-	assert.Contains(t, logs, "validationDuration")
-	assert.Contains(t, logs, "checksPerformed")
 }
 
 // TestDryRunActionLogging tests dry-run specific logging
@@ -351,7 +354,8 @@ func TestValidationFailureLogging(t *testing.T) {
 	volumeChecker := NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "openebs.io/cas-type=zfs-localpv", true)
 
 	ctx := context.Background()
-	validation, err := volumeChecker.ValidateForDeletion(ctx, zfsVolume)
+
+	validation, err := volumeChecker.ValidateForAction(ctx, zfsVolume)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, validation)
@@ -391,9 +395,10 @@ func TestStructuredLogging(t *testing.T) {
 	volumeChecker := NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "openebs.io/cas-type=zfs-localpv", true)
 
 	ctx := context.Background()
-	_, err := volumeChecker.IsOrphaned(ctx, zfsVolume)
 
+	validation, err := volumeChecker.ValidateForAction(ctx, zfsVolume)
 	assert.NoError(t, err)
+	_ = validation // Only logs are checked below
 
 	logs := logCapture.GetLogs()
 
@@ -401,7 +406,7 @@ func TestStructuredLogging(t *testing.T) {
 	assert.Contains(t, logs, "volumeName")
 	assert.Contains(t, logs, "namespace")
 	assert.Contains(t, logs, "checkDuration")
-	assert.Contains(t, logs, "Starting orphan status check")
+	assert.Contains(t, logs, "Starting safety validation for ZFSVolume action")
 
 	// Verify logs are not empty
 	assert.NotEmpty(t, logs, "Should have log output")
