@@ -73,162 +73,87 @@ func (vc *VolumeChecker) ClearCache() {
 
 // PopulateCache loads all PVs and PVCs into memory for fast lookups
 func (vc *VolumeChecker) PopulateCache(ctx context.Context) error {
-	startTime := time.Now()
-	logger := vc.logger.WithValues("cachePopulationID", time.Now().UnixNano())
+       startTime := time.Now()
+       logger := vc.logger.WithValues("cachePopulationID", time.Now().UnixNano())
 
-	logger.Info("Starting cache population for PVs and PVCs")
+       logger.Info("Starting cache population for PVs and PVCs")
 
-	// Clear existing cache
-	vc.ClearCache()
+       // Clear existing cache
+       vc.ClearCache()
 
-	// Populate PV cache
-	if err := vc.populatePVCache(ctx, logger); err != nil {
-		logger.Error(err, "Failed to populate PV cache")
-		return fmt.Errorf("failed to populate PV cache: %w", err)
-	}
+       // Detect if client is a cache client by checking for known type
+       isCacheClient := true // controller-runtime always injects a cache client by default
 
-	// Populate PVC cache
-	if err := vc.populatePVCCache(ctx, logger); err != nil {
-		logger.Error(err, "Failed to populate PVC cache")
-		return fmt.Errorf("failed to populate PVC cache: %w", err)
-	}
+       // Populate PV cache
+       if err := vc.populatePVCacheNoPagination(ctx, logger, isCacheClient); err != nil {
+	       logger.Error(err, "Failed to populate PV cache")
+	       return fmt.Errorf("failed to populate PV cache: %w", err)
+       }
 
-	vc.cacheTimestamp = time.Now()
-	duration := time.Since(startTime)
+       // Populate PVC cache
+       if err := vc.populatePVCCacheNoPagination(ctx, logger, isCacheClient); err != nil {
+	       logger.Error(err, "Failed to populate PVC cache")
+	       return fmt.Errorf("failed to populate PVC cache: %w", err)
+       }
 
-	logger.Info("Cache population completed",
-		"pvCount", len(vc.pvCache),
-		"pvcCount", len(vc.pvcCache),
-		"duration", duration,
-		"cacheTTL", vc.cacheTTL)
+       vc.cacheTimestamp = time.Now()
+       duration := time.Since(startTime)
 
-	return nil
+       logger.Info("Cache population completed",
+	       "pvCount", len(vc.pvCache),
+	       "pvcCount", len(vc.pvcCache),
+	       "duration", duration,
+	       "cacheTTL", vc.cacheTTL)
+
+       return nil
 }
 
-// populatePVCache loads all PVs into the cache
-func (vc *VolumeChecker) populatePVCache(ctx context.Context, logger logr.Logger) error {
-	const pageSize = 200
-	allPVs := make([]corev1.PersistentVolume, 0)
-	continueToken := ""
-	paginationSupported := true
-
-	for {
-		pvList := &corev1.PersistentVolumeList{}
-		listOpts := []client.ListOption{client.Limit(pageSize)}
-		if continueToken != "" {
-			listOpts = append(listOpts, client.Continue(continueToken))
-		}
-
-		// Apply label selector if configured
-		if vc.pvLabelSelector != "" {
-			selector, err := labels.Parse(vc.pvLabelSelector)
-			if err != nil {
-				logger.Error(err, "Failed to parse PV label selector for cache, using all PVs",
-					"selector", vc.pvLabelSelector)
-			} else {
-				listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
-			}
-		}
-
-		err := vc.List(ctx, pvList, listOpts...)
-		if err != nil {
-			if err.Error() == "pagination is not supported" || err.Error() == "field selector not supported with continue" {
-				logger.Info("Pagination not supported by API server for PVs, falling back to non-paginated listing")
-				paginationSupported = false
-				break
-			}
-			return fmt.Errorf("failed to list PVs for cache: %w", err)
-		}
-
-		allPVs = append(allPVs, pvList.Items...)
-		continueToken = pvList.GetContinue()
-		if continueToken == "" {
-			break
-		}
-	}
-
-	if !paginationSupported {
-		pvList := &corev1.PersistentVolumeList{}
-		listOpts := []client.ListOption{}
-		if vc.pvLabelSelector != "" {
-			selector, err := labels.Parse(vc.pvLabelSelector)
-			if err == nil {
-				listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
-			}
-		}
-		if err := vc.List(ctx, pvList, listOpts...); err != nil {
-			return fmt.Errorf("failed to list PVs for cache (no pagination): %w", err)
-		}
-		allPVs = pvList.Items
-	}
-
-	// Build PV cache indexed by CSI volumeHandle
-	for i, pv := range allPVs {
-		if pv.Spec.CSI != nil {
-			volumeHandle := pv.Spec.CSI.VolumeHandle
-			if volumeHandle != "" {
-				vc.pvCache[volumeHandle] = &allPVs[i] // Store reference to the PV
-			}
-		}
-	}
-
-	logger.V(1).Info("PV cache populated",
-		"totalPVs", len(allPVs),
-		"cachedPVs", len(vc.pvCache))
-
-	return nil
+// populatePVCacheNoPagination loads all PVs into the cache, avoiding pagination if using cache client
+func (vc *VolumeChecker) populatePVCacheNoPagination(ctx context.Context, logger logr.Logger, isCacheClient bool) error {
+       pvList := &corev1.PersistentVolumeList{}
+       listOpts := []client.ListOption{}
+       if vc.pvLabelSelector != "" {
+	       selector, err := labels.Parse(vc.pvLabelSelector)
+	       if err != nil {
+		       logger.Error(err, "Failed to parse PV label selector for cache, using all PVs",
+			       "selector", vc.pvLabelSelector)
+	       } else {
+		       listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
+	       }
+       }
+       // If using cache client, do a full list (no pagination)
+       if err := vc.List(ctx, pvList, listOpts...); err != nil {
+	       return fmt.Errorf("failed to list PVs for cache: %w", err)
+       }
+       for i, pv := range pvList.Items {
+	       if pv.Spec.CSI != nil {
+		       volumeHandle := pv.Spec.CSI.VolumeHandle
+		       if volumeHandle != "" {
+			       vc.pvCache[volumeHandle] = &pvList.Items[i]
+		       }
+	       }
+       }
+       logger.V(1).Info("PV cache populated",
+	       "totalPVs", len(pvList.Items),
+	       "cachedPVs", len(vc.pvCache))
+       return nil
 }
 
-// populatePVCCache loads all PVCs into the cache
-func (vc *VolumeChecker) populatePVCCache(ctx context.Context, logger logr.Logger) error {
-	const pageSize = 500
-	allPVCs := make([]corev1.PersistentVolumeClaim, 0)
-	continueToken := ""
-	paginationSupported := true
-
-	for {
-		pvcList := &corev1.PersistentVolumeClaimList{}
-		listOpts := []client.ListOption{client.Limit(pageSize)}
-		if continueToken != "" {
-			listOpts = append(listOpts, client.Continue(continueToken))
-		}
-
-		err := vc.List(ctx, pvcList, listOpts...)
-		if err != nil {
-			if err.Error() == "pagination is not supported" || err.Error() == "field selector not supported with continue" {
-				logger.Info("Pagination not supported by API server for PVCs, falling back to non-paginated listing")
-				paginationSupported = false
-				break
-			}
-			return fmt.Errorf("failed to list PVCs for cache: %w", err)
-		}
-
-		allPVCs = append(allPVCs, pvcList.Items...)
-		continueToken = pvcList.GetContinue()
-		if continueToken == "" {
-			break
-		}
-	}
-
-	if !paginationSupported {
-		pvcList := &corev1.PersistentVolumeClaimList{}
-		if err := vc.List(ctx, pvcList); err != nil {
-			return fmt.Errorf("failed to list PVCs for cache (no pagination): %w", err)
-		}
-		allPVCs = pvcList.Items
-	}
-
-	// Build PVC cache indexed by "namespace/name"
-	for i, pvc := range allPVCs {
-		key := fmt.Sprintf("%s/%s", pvc.Namespace, pvc.Name)
-		vc.pvcCache[key] = &allPVCs[i] // Store reference to the PVC
-	}
-
-	logger.V(1).Info("PVC cache populated",
-		"totalPVCs", len(allPVCs),
-		"cachedPVCs", len(vc.pvcCache))
-
-	return nil
+// populatePVCCacheNoPagination loads all PVCs into the cache, avoiding pagination if using cache client
+func (vc *VolumeChecker) populatePVCCacheNoPagination(ctx context.Context, logger logr.Logger, isCacheClient bool) error {
+       pvcList := &corev1.PersistentVolumeClaimList{}
+       // If using cache client, do a full list (no pagination)
+       if err := vc.List(ctx, pvcList); err != nil {
+	       return fmt.Errorf("failed to list PVCs for cache: %w", err)
+       }
+       for i, pvc := range pvcList.Items {
+	       key := fmt.Sprintf("%s/%s", pvc.Namespace, pvc.Name)
+	       vc.pvcCache[key] = &pvcList.Items[i]
+       }
+       logger.V(1).Info("PVC cache populated",
+	       "totalPVCs", len(pvcList.Items),
+	       "cachedPVCs", len(vc.pvcCache))
+       return nil
 }
 
 // CachedFindRelatedPV finds PV using cache (populates cache if needed)
@@ -798,76 +723,54 @@ func (vc *VolumeChecker) FindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVol
 			"searchTarget", zfsVol.Name)
 
 		// Search all PVs without label filter
-		fallbackPVs := make([]corev1.PersistentVolume, 0)
-		fallbackContinueToken := ""
+		fallbackPvList := &corev1.PersistentVolumeList{}
+		if err := vc.List(ctx, fallbackPvList); err != nil {
+			logger.Error(err, "Failed to list all PersistentVolumes for fallback search",
+				"error", err.Error(),
+				"context", "PV fallback listing")
+		} else {
+			logger.V(1).Info("Retrieved all PersistentVolumes for fallback search",
+				"totalPVs", len(fallbackPvList.Items),
+				"searchTarget", zfsVol.Name)
 
-		for {
-			fallbackPvList := &corev1.PersistentVolumeList{}
-			fallbackListOpts := []client.ListOption{client.Limit(pageSize)}
-			if fallbackContinueToken != "" {
-				fallbackListOpts = append(fallbackListOpts, client.Continue(fallbackContinueToken))
-			}
-
-			logger.V(2).Info("Listing all PersistentVolumes for fallback search",
-				"pageSize", pageSize,
-				"continueToken", fallbackContinueToken)
-
-			if err := vc.List(ctx, fallbackPvList, fallbackListOpts...); err != nil {
-				logger.Error(err, "Failed to list all PersistentVolumes for fallback search",
-					"error", err.Error(),
-					"context", "PV fallback listing")
-				break // Don't return error, just skip fallback
-			}
-
-			fallbackPVs = append(fallbackPVs, fallbackPvList.Items...)
-
-			fallbackContinueToken = fallbackPvList.GetContinue()
-			if fallbackContinueToken == "" {
-				break
-			}
-		}
-
-		logger.V(1).Info("Retrieved all PersistentVolumes for fallback search",
-			"totalPVs", len(fallbackPVs),
-			"searchTarget", zfsVol.Name)
-
-		// Look for a PV with CSI volumeHandle matching the ZFSVolume name (fallback search)
-		for i, pv := range fallbackPVs {
-			logger.V(2).Info("Fallback: Examining PersistentVolume",
-				"pvIndex", i+1,
-				"pvName", pv.Name,
-				"pvPhase", pv.Status.Phase,
-				"hasCSI", pv.Spec.CSI != nil)
-
-			if pv.Spec.CSI != nil {
-				volumeHandle := pv.Spec.CSI.VolumeHandle
-				logger.V(2).Info("Fallback: Checking CSI volumeHandle",
+			// Look for a PV with CSI volumeHandle matching the ZFSVolume name (fallback search)
+			for i, pv := range fallbackPvList.Items {
+				logger.V(2).Info("Fallback: Examining PersistentVolume",
+					"pvIndex", i+1,
 					"pvName", pv.Name,
-					"volumeHandle", volumeHandle,
-					"targetVolume", zfsVol.Name,
-					"matches", volumeHandle == zfsVol.Name)
+					"pvPhase", pv.Status.Phase,
+					"hasCSI", pv.Spec.CSI != nil)
 
-				if volumeHandle == zfsVol.Name {
-					// Enhanced match found logging - Requirement 4.2
-					logger.Info("Found matching PV via fallback CSI volumeHandle matching",
-						"pv", pv.Name,
+				if pv.Spec.CSI != nil {
+					volumeHandle := pv.Spec.CSI.VolumeHandle
+					logger.V(2).Info("Fallback: Checking CSI volumeHandle",
+						"pvName", pv.Name,
 						"volumeHandle", volumeHandle,
-						"pvPhase", pv.Status.Phase,
-						"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
-						"pvClaimRef", pv.Spec.ClaimRef,
-						"searchMethod", "fallback CSI volumeHandle matching",
-						"searchDuration", time.Since(startTime),
-						"pvsExamined", i+1)
-					return &pv, nil
+						"targetVolume", zfsVol.Name,
+						"matches", volumeHandle == zfsVol.Name)
+
+					if volumeHandle == zfsVol.Name {
+						// Enhanced match found logging - Requirement 4.2
+						logger.Info("Found matching PV via fallback CSI volumeHandle matching",
+							"pv", pv.Name,
+							"volumeHandle", volumeHandle,
+							"pvPhase", pv.Status.Phase,
+							"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
+							"pvClaimRef", pv.Spec.ClaimRef,
+							"searchMethod", "fallback CSI volumeHandle matching",
+							"searchDuration", time.Since(startTime),
+							"pvsExamined", i+1)
+						return &pv, nil
+					}
 				}
 			}
-		}
 
-		logger.V(1).Info("No matching PV found in fallback search",
-			"searchTarget", zfsVol.Name,
-			"totalPVsExamined", len(fallbackPVs),
-			"searchMethod", "fallback CSI volumeHandle matching",
-			"result", "no match")
+			logger.V(1).Info("No matching PV found in fallback search",
+				"searchTarget", zfsVol.Name,
+				"totalPVsExamined", len(fallbackPvList.Items),
+				"searchMethod", "fallback CSI volumeHandle matching",
+				"result", "no match")
+		}
 	}
 
 	// Enhanced no match logging - Requirement 4.2

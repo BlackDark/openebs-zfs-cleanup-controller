@@ -65,6 +65,7 @@ func NewZFSVolumeReconciler(client client.Client, scheme *runtime.Scheme, config
 
 // Reconcile handles the reconciliation logic for ZFSVolume resources
 func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+
 	startTime := time.Now()
 	logger := r.Logger.WithValues("zfsvolume", req.NamespacedName, "reconcileID", time.Now().UnixNano())
 	namespace := req.Namespace
@@ -75,6 +76,20 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Create a timeout context for this reconciliation
 	reconcileCtx, cancel := context.WithTimeout(ctx, r.Config.ReconcileTimeout)
 	defer cancel()
+
+	// Log context deadline and parent context error (if any)
+	if deadline, ok := reconcileCtx.Deadline(); ok {
+		logger.Info("Reconcile context created",
+			"deadline", deadline,
+			"timeout", r.Config.ReconcileTimeout.String(),
+			"parentErr", ctx.Err(),
+		)
+	} else {
+		logger.Info("Reconcile context created (no deadline)",
+			"timeout", r.Config.ReconcileTimeout.String(),
+			"parentErr", ctx.Err(),
+		)
+	}
 
 	// Track active reconciliations
 	r.Metrics.IncActiveReconciliations(namespace)
@@ -89,28 +104,38 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	defer func() {
 		duration := time.Since(startTime)
 		logger.V(1).Info("Reconciliation completed", "duration", duration)
+		// Log context error if present (e.g., context canceled or deadline exceeded)
+		if reconcileCtx.Err() != nil {
+			logger.Error(reconcileCtx.Err(), "Reconcile context ended with error",
+				"contextError", reconcileCtx.Err().Error(),
+			)
+		}
 		// Record reconciliation metrics
 		r.Metrics.RecordReconciliation(namespace, reconcileResult, duration)
 	}()
 
-	// Get the ZFSVolume resource using rate-limited client
-	zfsVolume := &zfsv1.ZFSVolume{}
-	if err := r.RateLimitedClient.Get(reconcileCtx, req.NamespacedName, zfsVolume); err != nil {
-		if errors.IsNotFound(err) {
-			// ZFSVolume was deleted, nothing to do
-			logger.V(1).Info("ZFSVolume not found, likely deleted - reconciliation complete")
-			reconcileResult = "success"
-			return ctrl.Result{}, nil
-		}
-		// Enhanced error logging - Requirement 4.5
-		logger.Error(err, "Failed to get ZFSVolume from API server",
-			"namespace", req.Namespace,
-			"name", req.Name,
-			"error", err.Error())
-		r.Metrics.RecordProcessingError(namespace, "api_error")
-		reconcileResult = "failed"
-		return ctrl.Result{}, fmt.Errorf("failed to get ZFSVolume: %w", err)
-	}
+       // Get the ZFSVolume resource using rate-limited client
+       zfsVolume := &zfsv1.ZFSVolume{}
+       var getErr error
+       getErr = r.RateLimitedClient.Get(reconcileCtx, req.NamespacedName, zfsVolume)
+       if getErr != nil {
+	       if errors.IsNotFound(getErr) {
+		       // ZFSVolume was deleted, nothing to do
+		       logger.V(1).Info("ZFSVolume not found, likely deleted - reconciliation complete")
+		       reconcileResult = "success"
+		       logger.Info("Reconcile returning (NotFound)", "result", ctrl.Result{}, "error", nil)
+		       return ctrl.Result{}, nil
+	       }
+	       // Enhanced error logging - Requirement 4.5
+	       logger.Error(getErr, "Failed to get ZFSVolume from API server",
+		       "namespace", req.Namespace,
+		       "name", req.Name,
+		       "error", getErr.Error())
+	       r.Metrics.RecordProcessingError(namespace, "api_error")
+	       reconcileResult = "failed"
+	       logger.Info("Reconcile returning (Get error)", "result", ctrl.Result{}, "error", getErr)
+	       return ctrl.Result{}, fmt.Errorf("failed to get ZFSVolume: %w", getErr)
+       }
 
 	// Record that we processed a volume
 	r.Metrics.RecordVolumeProcessed(namespace)
@@ -124,37 +149,40 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		"finalizers", zfsVolume.Finalizers,
 		"deletionTimestamp", zfsVolume.DeletionTimestamp)
 
-	// Check if the ZFSVolume is being deleted
-	if zfsVolume.DeletionTimestamp != nil {
-		logger.Info("ZFSVolume is being deleted, skipping reconciliation",
-			"deletionTimestamp", zfsVolume.DeletionTimestamp)
-		reconcileResult = "success"
-		return ctrl.Result{}, nil
-	}
+       // Check if the ZFSVolume is being deleted
+       if zfsVolume.DeletionTimestamp != nil {
+	       logger.Info("ZFSVolume is being deleted, skipping reconciliation",
+		       "deletionTimestamp", zfsVolume.DeletionTimestamp)
+	       reconcileResult = "success"
+	       logger.Info("Reconcile returning (Being deleted)", "result", ctrl.Result{}, "error", nil)
+	       return ctrl.Result{}, nil
+       }
 
 	// Check if the ZFSVolume is orphaned
 	logger.V(1).Info("Checking if ZFSVolume is orphaned")
-	isOrphaned, err := r.VolumeChecker.IsOrphaned(reconcileCtx, zfsVolume)
-	if err != nil {
-		// Enhanced error logging - Requirement 4.5
-		logger.Error(err, "Failed to check if ZFSVolume is orphaned",
-			"volumeName", zfsVolume.Name,
-			"namespace", zfsVolume.Namespace,
-			"error", err.Error(),
-			"context", "orphan status check")
-		r.Metrics.RecordProcessingError(namespace, "orphan_check_error")
-		reconcileResult = "failed"
-		return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to check orphan status: %w", err)
-	}
+       isOrphaned, err := r.VolumeChecker.IsOrphaned(reconcileCtx, zfsVolume)
+       if err != nil {
+	       // Enhanced error logging - Requirement 4.5
+	       logger.Error(err, "Failed to check if ZFSVolume is orphaned",
+		       "volumeName", zfsVolume.Name,
+		       "namespace", zfsVolume.Namespace,
+		       "error", err.Error(),
+		       "context", "orphan status check")
+	       r.Metrics.RecordProcessingError(namespace, "orphan_check_error")
+	       reconcileResult = "failed"
+	       logger.Info("Reconcile returning (Orphan check error)", "result", ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, "error", err)
+	       return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to check orphan status: %w", err)
+       }
 
-	if !isOrphaned {
-		logger.Info("ZFSVolume is not orphaned, no action needed",
-			"action", "skip",
-			"reason", "volume has active PV or PVC references",
-			"nextReconcile", r.Config.ReconcileInterval)
-		reconcileResult = "success"
-		return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
-	}
+       if !isOrphaned {
+	       logger.Info("ZFSVolume is not orphaned, no action needed",
+		       "action", "skip",
+		       "reason", "volume has active PV or PVC references",
+		       "nextReconcile", r.Config.ReconcileInterval)
+	       reconcileResult = "success"
+	       logger.Info("Reconcile returning (Not orphaned)", "result", ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, "error", nil)
+	       return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
+       }
 
 	// Record orphaned volume found
 	r.Metrics.RecordOrphanedVolume(namespace)
@@ -169,44 +197,47 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Validate if it's safe to delete
 	logger.V(1).Info("Validating ZFSVolume for safe deletion")
-	validation, err := r.VolumeChecker.ValidateForDeletion(reconcileCtx, zfsVolume)
-	if err != nil {
-		// Enhanced error logging - Requirement 4.5
-		logger.Error(err, "Failed to validate ZFSVolume for deletion",
-			"volumeName", zfsVolume.Name,
-			"namespace", zfsVolume.Namespace,
-			"error", err.Error(),
-			"context", "deletion validation")
-		r.Metrics.RecordProcessingError(namespace, "validation_error")
-		reconcileResult = "failed"
-		return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to validate for deletion: %w", err)
-	}
+       validation, err := r.VolumeChecker.ValidateForDeletion(reconcileCtx, zfsVolume)
+       if err != nil {
+	       // Enhanced error logging - Requirement 4.5
+	       logger.Error(err, "Failed to validate ZFSVolume for deletion",
+		       "volumeName", zfsVolume.Name,
+		       "namespace", zfsVolume.Namespace,
+		       "error", err.Error(),
+		       "context", "deletion validation")
+	       r.Metrics.RecordProcessingError(namespace, "validation_error")
+	       reconcileResult = "failed"
+	       logger.Info("Reconcile returning (Validation error)", "result", ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, "error", err)
+	       return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to validate for deletion: %w", err)
+       }
 
 	// Log the action (dry-run or actual) - Requirement 4.6
 	r.VolumeChecker.LogDeletionAction(zfsVolume, validation)
 
-	if !validation.IsSafe {
-		logger.Info("ZFSVolume failed safety validation, skipping deletion",
-			"action", "skip",
-			"reason", validation.Reason,
-			"validationErrors", validation.ValidationErrors,
-			"nextReconcile", r.Config.ReconcileInterval)
-		reconcileResult = "success"
-		return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
-	}
+       if !validation.IsSafe {
+	       logger.Info("ZFSVolume failed safety validation, skipping deletion",
+		       "action", "skip",
+		       "reason", validation.Reason,
+		       "validationErrors", validation.ValidationErrors,
+		       "nextReconcile", r.Config.ReconcileInterval)
+	       reconcileResult = "success"
+	       logger.Info("Reconcile returning (Not safe)", "result", ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, "error", nil)
+	       return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
+       }
 
 	// If dry-run mode, don't actually delete - Requirement 4.6
-	if r.Config.DryRun {
-		logger.Info("DRY-RUN: Would delete ZFSVolume",
-			"action", "delete",
-			"mode", "dry-run",
-			"volumeName", zfsVolume.Name,
-			"namespace", zfsVolume.Namespace,
-			"reason", "orphaned volume passed safety validation")
-		r.Metrics.RecordDeletionAttempt(namespace, "dry_run", 0)
-		reconcileResult = "success"
-		return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
-	}
+       if r.Config.DryRun {
+	       logger.Info("DRY-RUN: Would delete ZFSVolume",
+		       "action", "delete",
+		       "mode", "dry-run",
+		       "volumeName", zfsVolume.Name,
+		       "namespace", zfsVolume.Namespace,
+		       "reason", "orphaned volume passed safety validation")
+	       r.Metrics.RecordDeletionAttempt(namespace, "dry_run", 0)
+	       reconcileResult = "success"
+	       logger.Info("Reconcile returning (Dry run)", "result", ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, "error", nil)
+	       return ctrl.Result{RequeueAfter: r.Config.ReconcileInterval}, nil
+       }
 
 	// Perform the actual deletion
 	logger.Info("Attempting to delete orphaned ZFSVolume",
@@ -216,29 +247,31 @@ func (r *ZFSVolumeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		"namespace", zfsVolume.Namespace)
 
 	deletionStartTime := time.Now()
-	if err := r.deleteZFSVolume(reconcileCtx, zfsVolume); err != nil {
-		// Enhanced error logging - Requirement 4.4, 4.5
-		logger.Error(err, "Failed to delete ZFSVolume",
-			"volumeName", zfsVolume.Name,
-			"namespace", zfsVolume.Namespace,
-			"error", err.Error(),
-			"context", "volume deletion",
-			"retryAfter", r.Config.RetryBackoffBase)
-		r.Metrics.RecordDeletionAttempt(namespace, "failed", time.Since(deletionStartTime))
-		reconcileResult = "failed"
-		return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to delete ZFSVolume: %w", err)
-	}
+       if err := r.deleteZFSVolume(reconcileCtx, zfsVolume); err != nil {
+	       // Enhanced error logging - Requirement 4.4, 4.5
+	       logger.Error(err, "Failed to delete ZFSVolume",
+		       "volumeName", zfsVolume.Name,
+		       "namespace", zfsVolume.Namespace,
+		       "error", err.Error(),
+		       "context", "volume deletion",
+		       "retryAfter", r.Config.RetryBackoffBase)
+	       r.Metrics.RecordDeletionAttempt(namespace, "failed", time.Since(deletionStartTime))
+	       reconcileResult = "failed"
+	       logger.Info("Reconcile returning (Delete error)", "result", ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, "error", err)
+	       return ctrl.Result{RequeueAfter: r.Config.RetryBackoffBase}, fmt.Errorf("failed to delete ZFSVolume: %w", err)
+       }
 
 	// Enhanced success logging - Requirement 4.4
-	logger.Info("Successfully deleted orphaned ZFSVolume",
-		"action", "delete",
-		"status", "success",
-		"volumeName", zfsVolume.Name,
-		"namespace", zfsVolume.Namespace,
-		"duration", time.Since(startTime))
-	r.Metrics.RecordDeletionAttempt(namespace, "success", time.Since(deletionStartTime))
-	reconcileResult = "success"
-	return ctrl.Result{}, nil
+       logger.Info("Successfully deleted orphaned ZFSVolume",
+	       "action", "delete",
+	       "status", "success",
+	       "volumeName", zfsVolume.Name,
+	       "namespace", zfsVolume.Namespace,
+	       "duration", time.Since(startTime))
+       r.Metrics.RecordDeletionAttempt(namespace, "success", time.Since(deletionStartTime))
+       reconcileResult = "success"
+       logger.Info("Reconcile returning (Deleted)", "result", ctrl.Result{}, "error", nil)
+       return ctrl.Result{}, nil
 }
 
 // findOrphanedZFSVolumes scans all ZFSVolumes and identifies orphaned candidates

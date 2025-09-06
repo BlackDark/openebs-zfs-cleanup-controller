@@ -39,6 +39,7 @@ func init() {
 }
 
 func main() {
+	setupLog.Info("Process started: entering main()")
 	var mode string
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -75,15 +76,37 @@ func main() {
 		fmt.Printf("🚀 OpenEBS ZFS Cleanup Controller Version %s\n", version)
 		fmt.Printf("Commit: %s\n", commit)
 		fmt.Printf("Built: %s\n", date)
+		setupLog.Info("Exiting after showing version info")
 		os.Exit(0)
 	}
 
 	// Load configuration from environment variables
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		setupLog.Error(err, "failed to load configuration")
+		setupLog.Error(err, "failed to load configuration, exiting main()")
 		os.Exit(1)
 	}
+
+	// Log all loaded config values, especially timeouts and intervals
+	setupLog.Info("Loaded configuration settings",
+		"DryRun", cfg.DryRun,
+		"ReconcileInterval", cfg.ReconcileInterval.String(),
+		"ReconcileTimeout", cfg.ReconcileTimeout.String(),
+		"ListOperationTimeout", cfg.ListOperationTimeout.String(),
+		"MaxConcurrentReconciles", cfg.MaxConcurrentReconciles,
+		"RetryBackoffBase", cfg.RetryBackoffBase.String(),
+		"MaxRetryAttempts", cfg.MaxRetryAttempts,
+		"APIRateLimit", cfg.APIRateLimit,
+		"APIBurst", cfg.APIBurst,
+		"NamespaceFilter", cfg.NamespaceFilter,
+		"LabelSelector", cfg.LabelSelector,
+		"PVLabelSelector", cfg.PVLabelSelector,
+		"MetricsPort", cfg.MetricsPort,
+		"ProbePort", cfg.ProbePort,
+		"EnableLeaderElection", cfg.EnableLeaderElection,
+		"LogLevel", cfg.LogLevel,
+		"LogFormat", cfg.LogFormat,
+	)
 
 	// Set log level from config
 	switch cfg.LogLevel {
@@ -110,7 +133,7 @@ func main() {
 		cfg.CronJobMode = false
 		setupLog.Info("Running in controller mode - long-running service")
 	default:
-		setupLog.Error(nil, "invalid mode specified", "mode", mode, "validModes", []string{"controller", "cronjob"})
+		setupLog.Error(nil, "invalid mode specified, exiting main()", "mode", mode, "validModes", []string{"controller", "cronjob"})
 		os.Exit(1)
 	}
 
@@ -239,6 +262,13 @@ func runController(cfg *config.Config, version, metricsAddr, probeAddr string, e
 		os.Exit(1)
 	}
 
+	setupLog.Info("Controller startup: initializing manager and reconciler",
+		"version", version,
+		"metricsAddr", metricsAddr,
+		"probeAddr", probeAddr,
+		"gracefulShutdownTimeout", shutdownTimeout,
+	)
+
 	// Create controller manager with configurable reconcile intervals
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                        scheme,
@@ -348,11 +378,14 @@ func setupGracefulShutdown(timeout time.Duration) context.Context {
 
 	// Start a goroutine to handle signals
 	go func() {
-		defer cancel()
 		sig := <-signalChan
 		setupLog.Info("Received shutdown signal, initiating graceful shutdown",
 			"signal", sig.String(),
 			"gracefulShutdownTimeout", timeout)
+		defer func() {
+			setupLog.Info("Calling cancel() on root context from signal handler")
+		}()
+		defer cancel()
 
 		// Create a timeout context for graceful shutdown
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), timeout)
