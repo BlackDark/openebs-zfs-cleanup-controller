@@ -1,3 +1,4 @@
+# NOTE: Before building the Docker image locally, run 'make build-cross' to ensure all binaries are present in bin/.
 ##@ Testing
 
 .PHONY: integration-test
@@ -66,6 +67,28 @@ build: fmt vet ## Build manager binary.
 .PHONY: build-versioned
 build-versioned: fmt vet ## Build manager binary with version information.
 	go build -o bin/manager \
+		-ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" \
+		cmd/main.go
+
+.PHONY: build-cross
+build-cross: fmt vet ## Build manager binaries for multiple architectures.
+	@echo "Building for linux/amd64..."
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o bin/manager-linux-amd64 \
+		-ldflags "-X main.version=${VERSION:-dev} -X main.commit=${COMMIT:-unknown} -X main.date=${DATE:-unknown}" \
+		cmd/main.go
+	@echo "Building for linux/arm64..."
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -o bin/manager-linux-arm64 \
+		-ldflags "-X main.version=${VERSION:-dev} -X main.commit=${COMMIT:-unknown} -X main.date=${DATE:-unknown}" \
+		cmd/main.go
+
+.PHONY: build-cross-versioned
+build-cross-versioned: fmt vet ## Build manager binaries for multiple architectures with version info.
+	@echo "Building for linux/amd64..."
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o bin/manager-linux-amd64 \
+		-ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" \
+		cmd/main.go
+	@echo "Building for linux/arm64..."
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -o bin/manager-linux-arm64 \
 		-ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" \
 		cmd/main.go
 

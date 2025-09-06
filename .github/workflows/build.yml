@@ -33,11 +33,39 @@ jobs:
       - name: Inject enhanced GitHub environment variables
         uses: rlespinasse/github-slug-action@v5
 
-      # https://github.com/docker/setup-qemu-action
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      # Set up Go
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          image: tonistiigi/binfmt:qemu-v8.1.5 # more recent
+          go-version: "1.24"
+
+      # Cache Go modules
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # Cache Docker layers
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      # Build binaries for multiple architectures
+      - name: Build cross-platform binaries
+        run: |
+          make build-cross-versioned \
+            VERSION=${{ env.GITHUB_REF_SLUG }} \
+            COMMIT=${{ github.sha }} \
+            DATE=${{ github.event.head_commit.timestamp }}
 
       # https://github.com/docker/setup-buildx-action
       - name: Set up Docker Buildx
@@ -106,10 +134,6 @@ jobs:
           push: ${{ steps.set_platforms.outputs.push }}
           tags: ${{ steps.meta_zfs_gc.outputs.tags }}
           labels: ${{ steps.meta_zfs_gc.outputs.labels }}
-          build-args: |
-            ZFS_GC_VERSION=${{ env.GITHUB_REF_SLUG }}
-            BUILD_COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
 
       # - name: Docker Hub Description
       #   if: github.event_name != 'pull_request'
