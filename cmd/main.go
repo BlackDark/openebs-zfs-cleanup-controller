@@ -14,6 +14,7 @@ import (
 	clientpkg "github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/client"
 	"github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/config"
 	"github.com/blackdark/openebs-zfsvolume-cleanup-controller/pkg/controller"
+	zapcore "go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -77,14 +78,28 @@ func main() {
 		os.Exit(0)
 	}
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
-
 	// Load configuration from environment variables
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		setupLog.Error(err, "failed to load configuration")
 		os.Exit(1)
 	}
+
+	// Set log level from config
+	switch cfg.LogLevel {
+	case "debug":
+		opts.Level = zapcore.DebugLevel
+	case "info":
+		opts.Level = zapcore.InfoLevel
+	case "warn":
+		opts.Level = zapcore.WarnLevel
+	case "error":
+		opts.Level = zapcore.ErrorLevel
+	default:
+		opts.Level = zapcore.InfoLevel
+	}
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	// Set mode-specific configuration
 	switch mode {

@@ -45,15 +45,11 @@ func NewZFSVolumeReconciler(client client.Client, scheme *runtime.Scheme, config
 	rateLimitedClient := ratelimiter.NewRateLimitedClient(client, config.APIRateLimit, config.APIBurst)
 
 	// Use rate-limited client for volume checker with configurable PV label selector
-	pvLabelSelector := config.PVLabelSelector
-	if pvLabelSelector == "" {
-		pvLabelSelector = "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io" // Default fallback
-	}
-
 	// Enable caching for cronjob mode, disable for controller mode
 	enableCaching := config.CronJobMode
 
-	volumeChecker := checker.NewVolumeChecker(rateLimitedClient, logger.WithName("volume-checker"), config.DryRun, pvLabelSelector, enableCaching)
+	// Only use PV label selector if user has configured it
+	volumeChecker := checker.NewVolumeChecker(rateLimitedClient, logger.WithName("volume-checker"), config.DryRun, config.PVLabelSelector, enableCaching)
 	metricsCollector := metrics.NewMetricsCollector()
 
 	return &ZFSVolumeReconciler{
@@ -302,13 +298,13 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 	listCtx, listCancel := context.WithTimeout(ctx, r.Config.ListOperationTimeout)
 	defer listCancel()
 
-	// Use pagination to handle large result sets efficiently
+	// Use pagination to handle large result sets efficiently, fallback to non-paginated if unsupported
 	const pageSize = 500 // Process in batches of 500 to optimize memory usage
 	allZFSVolumes := make([]zfsv1.ZFSVolume, 0)
 	continueToken := ""
+	paginationSupported := true
 
 	for {
-		// Create a fresh list for each page
 		zfsVolumeList := &zfsv1.ZFSVolumeList{}
 		pageOpts := append(listOpts, client.Limit(pageSize))
 		if continueToken != "" {
@@ -319,8 +315,14 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 			"pageSize", pageSize,
 			"continueToken", continueToken)
 
-		if err := r.RateLimitedClient.List(listCtx, zfsVolumeList, pageOpts...); err != nil {
-			// Enhanced error logging - Requirement 4.5
+		err := r.RateLimitedClient.List(listCtx, zfsVolumeList, pageOpts...)
+		if err != nil {
+			// If error indicates unsupported pagination, fallback to non-paginated
+			if err.Error() == "pagination is not supported" || err.Error() == "field selector not supported with continue" {
+				logger.Info("Pagination not supported by API server, falling back to non-paginated listing")
+				paginationSupported = false
+				break
+			}
 			logger.Error(err, "Failed to list ZFSVolumes from Kubernetes API",
 				"error", err.Error(),
 				"context", "volume listing",
@@ -331,19 +333,31 @@ func (r *ZFSVolumeReconciler) findOrphanedZFSVolumes(ctx context.Context) (*Reco
 			return nil, fmt.Errorf("failed to list ZFSVolumes: %w", err)
 		}
 
-		// Add this page's items to our collection
 		allZFSVolumes = append(allZFSVolumes, zfsVolumeList.Items...)
-
-		// Check if there are more pages
 		continueToken = zfsVolumeList.GetContinue()
 		if continueToken == "" {
-			break // No more pages
+			break
 		}
-
 		logger.V(1).Info("Fetched page of ZFSVolumes",
 			"pageSize", len(zfsVolumeList.Items),
 			"totalSoFar", len(allZFSVolumes),
 			"hasMorePages", continueToken != "")
+	}
+
+	// If pagination is not supported, do a single non-paginated list
+	if !paginationSupported {
+		zfsVolumeList := &zfsv1.ZFSVolumeList{}
+		if err := r.RateLimitedClient.List(listCtx, zfsVolumeList, listOpts...); err != nil {
+			logger.Error(err, "Failed to list ZFSVolumes without pagination",
+				"error", err.Error(),
+				"context", "volume listing fallback",
+				"namespaceFilter", r.Config.NamespaceFilter,
+				"labelSelector", r.Config.LabelSelector)
+			r.Metrics.RecordProcessingError(metricsNamespace, "api_error")
+			r.Metrics.RecordReconciliation(metricsNamespace, "failed", time.Since(startTime))
+			return nil, fmt.Errorf("failed to list ZFSVolumes (no pagination): %w", err)
+		}
+		allZFSVolumes = zfsVolumeList.Items
 	}
 
 	// Enhanced volume processing logging - Requirement 4.2

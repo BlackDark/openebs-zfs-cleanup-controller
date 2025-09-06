@@ -70,7 +70,7 @@ func TestOrphanCheckLogging(t *testing.T) {
 		WithObjects(zfsVolume).
 		Build()
 
-	volumeChecker := NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "openebs.io/cas-type=zfs-localpv", true)
+	volumeChecker := NewVolumeChecker(fakeClient, logCapture.GetLogger(), false, "", true)
 
 	ctx := context.Background()
 	isOrphaned, err := volumeChecker.IsOrphaned(ctx, zfsVolume)
@@ -83,8 +83,6 @@ func TestOrphanCheckLogging(t *testing.T) {
 	// Verify comprehensive orphan check logging
 	assert.Contains(t, logs, "Starting orphan status check for ZFSVolume")
 	assert.Contains(t, logs, "Searching for related PersistentVolume")
-	assert.Contains(t, logs, "No PVs found with label selector, trying fallback search without label filter")
-	assert.Contains(t, logs, "Retrieved all PVs for fallback cache population")
 	assert.Contains(t, logs, "PV not found in cache")
 	assert.Contains(t, logs, "No related PV found, ZFSVolume is orphaned")
 	assert.Contains(t, logs, "ORPHANED")

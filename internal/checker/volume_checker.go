@@ -110,6 +110,7 @@ func (vc *VolumeChecker) populatePVCache(ctx context.Context, logger logr.Logger
 	const pageSize = 200
 	allPVs := make([]corev1.PersistentVolume, 0)
 	continueToken := ""
+	paginationSupported := true
 
 	for {
 		pvList := &corev1.PersistentVolumeList{}
@@ -129,7 +130,13 @@ func (vc *VolumeChecker) populatePVCache(ctx context.Context, logger logr.Logger
 			}
 		}
 
-		if err := vc.List(ctx, pvList, listOpts...); err != nil {
+		err := vc.List(ctx, pvList, listOpts...)
+		if err != nil {
+			if err.Error() == "pagination is not supported" || err.Error() == "field selector not supported with continue" {
+				logger.Info("Pagination not supported by API server for PVs, falling back to non-paginated listing")
+				paginationSupported = false
+				break
+			}
 			return fmt.Errorf("failed to list PVs for cache: %w", err)
 		}
 
@@ -140,35 +147,19 @@ func (vc *VolumeChecker) populatePVCache(ctx context.Context, logger logr.Logger
 		}
 	}
 
-	// If no PVs found with label selector, try fallback: search all PVs without label filter
-	if len(allPVs) == 0 && vc.pvLabelSelector != "" {
-		logger.V(1).Info("No PVs found with label selector, trying fallback search without label filter")
-
-		fallbackPVs := make([]corev1.PersistentVolume, 0)
-		fallbackContinueToken := ""
-
-		for {
-			fallbackPvList := &corev1.PersistentVolumeList{}
-			fallbackListOpts := []client.ListOption{client.Limit(pageSize)}
-			if fallbackContinueToken != "" {
-				fallbackListOpts = append(fallbackListOpts, client.Continue(fallbackContinueToken))
-			}
-
-			if err := vc.List(ctx, fallbackPvList, fallbackListOpts...); err != nil {
-				logger.Error(err, "Failed to list all PVs for fallback cache population")
-				break // Don't return error, just skip fallback
-			}
-
-			fallbackPVs = append(fallbackPVs, fallbackPvList.Items...)
-			fallbackContinueToken = fallbackPvList.GetContinue()
-			if fallbackContinueToken == "" {
-				break
+	if !paginationSupported {
+		pvList := &corev1.PersistentVolumeList{}
+		listOpts := []client.ListOption{}
+		if vc.pvLabelSelector != "" {
+			selector, err := labels.Parse(vc.pvLabelSelector)
+			if err == nil {
+				listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
 			}
 		}
-
-		logger.V(1).Info("Retrieved all PVs for fallback cache population",
-			"totalPVs", len(fallbackPVs))
-		allPVs = fallbackPVs
+		if err := vc.List(ctx, pvList, listOpts...); err != nil {
+			return fmt.Errorf("failed to list PVs for cache (no pagination): %w", err)
+		}
+		allPVs = pvList.Items
 	}
 
 	// Build PV cache indexed by CSI volumeHandle
@@ -193,6 +184,7 @@ func (vc *VolumeChecker) populatePVCCache(ctx context.Context, logger logr.Logge
 	const pageSize = 500
 	allPVCs := make([]corev1.PersistentVolumeClaim, 0)
 	continueToken := ""
+	paginationSupported := true
 
 	for {
 		pvcList := &corev1.PersistentVolumeClaimList{}
@@ -201,7 +193,13 @@ func (vc *VolumeChecker) populatePVCCache(ctx context.Context, logger logr.Logge
 			listOpts = append(listOpts, client.Continue(continueToken))
 		}
 
-		if err := vc.List(ctx, pvcList, listOpts...); err != nil {
+		err := vc.List(ctx, pvcList, listOpts...)
+		if err != nil {
+			if err.Error() == "pagination is not supported" || err.Error() == "field selector not supported with continue" {
+				logger.Info("Pagination not supported by API server for PVCs, falling back to non-paginated listing")
+				paginationSupported = false
+				break
+			}
 			return fmt.Errorf("failed to list PVCs for cache: %w", err)
 		}
 
@@ -210,6 +208,14 @@ func (vc *VolumeChecker) populatePVCCache(ctx context.Context, logger logr.Logge
 		if continueToken == "" {
 			break
 		}
+	}
+
+	if !paginationSupported {
+		pvcList := &corev1.PersistentVolumeClaimList{}
+		if err := vc.List(ctx, pvcList); err != nil {
+			return fmt.Errorf("failed to list PVCs for cache (no pagination): %w", err)
+		}
+		allPVCs = pvcList.Items
 	}
 
 	// Build PVC cache indexed by "namespace/name"
@@ -302,6 +308,19 @@ func (vc *VolumeChecker) IsOrphaned(ctx context.Context, zfsVol *zfsv1.ZFSVolume
 		"namespace", zfsVol.Namespace,
 		"orphanCheckID", time.Now().UnixNano())
 
+	// Debug: Print PV cache keys and info
+	if logger.V(2).Enabled() {
+		pvNames := make([]string, 0, len(vc.pvCache))
+		pvHandles := make([]string, 0, len(vc.pvCache))
+		for _, pv := range vc.pvCache {
+			pvNames = append(pvNames, pv.Name)
+			if pv.Spec.CSI != nil {
+				pvHandles = append(pvHandles, pv.Spec.CSI.VolumeHandle)
+			}
+		}
+		logger.Info("PV cache debug", "pvCacheKeys", pvNames, "pvCacheHandles", pvHandles)
+	}
+
 	// Enhanced startup logging - Requirement 4.2
 	logger.V(1).Info("Starting orphan status check for ZFSVolume",
 		"volumeName", zfsVol.Name,
@@ -312,6 +331,19 @@ func (vc *VolumeChecker) IsOrphaned(ctx context.Context, zfsVol *zfsv1.ZFSVolume
 	// First, try to find a related PV
 	logger.V(1).Info("Searching for related PersistentVolume")
 	pv, err := vc.CachedFindRelatedPV(ctx, zfsVol)
+	if logger.V(2).Enabled() {
+		if pv != nil {
+			logger.Info("PV match debug", "matchedPVName", pv.Name, "matchedPVHandle", func() string {
+				if pv.Spec.CSI != nil {
+					return pv.Spec.CSI.VolumeHandle
+				} else {
+					return "<none>"
+				}
+			}())
+		} else {
+			logger.Info("PV match debug", "matchedPVName", nil)
+		}
+	}
 	if err != nil {
 		// Enhanced error logging - Requirement 4.5
 		logger.Error(err, "Failed to check for related PV",
@@ -423,7 +455,20 @@ func (vc *VolumeChecker) ValidateForDeletion(ctx context.Context, zfsVol *zfsv1.
 
 	validationChecks = append(validationChecks, fmt.Sprintf("orphan_status_check:passed(orphaned=%t)", isOrphaned))
 
-	// Check if the ZFSVolume has finalizers that would prevent deletion
+	// If not orphaned, this is always unsafe, so return immediately
+	if !isOrphaned {
+		result.IsSafe = false
+		result.Reason = "ZFSVolume is not orphaned"
+		result.ValidationErrors = append(result.ValidationErrors, "volume has active PV or PVC references")
+		logger.Info("ZFSVolume is not orphaned, not safe to delete",
+			"validationResult", "FAILED")
+		validationChecks = append(validationChecks, "orphan_check:FAILED")
+		return result, nil
+	} else {
+		validationChecks = append(validationChecks, "orphan_check:passed")
+	}
+
+	// Only check finalizers if the volume is orphaned
 	if len(zfsVol.Finalizers) > 0 {
 		logger.V(1).Info("Checking finalizers for blocking conditions",
 			"totalFinalizers", len(zfsVol.Finalizers),
@@ -435,7 +480,7 @@ func (vc *VolumeChecker) ValidateForDeletion(ctx context.Context, zfsVol *zfsv1.
 		ignoredFinalizers := []string{}
 
 		for _, finalizer := range zfsVol.Finalizers {
-			if finalizer == "zfs.openebs.io/finalizer" && isOrphaned {
+			if finalizer == "zfs.openebs.io/finalizer" {
 				// Skip this finalizer for orphaned volumes
 				ignoredFinalizers = append(ignoredFinalizers, finalizer)
 				logger.Info("Ignoring zfs.openebs.io/finalizer for orphaned volume",
@@ -516,6 +561,8 @@ func (vc *VolumeChecker) ValidateForDeletion(ctx context.Context, zfsVol *zfsv1.
 		logger.Info("ZFSVolume is not orphaned, not safe to delete",
 			"validationResult", "FAILED")
 		validationChecks = append(validationChecks, "orphan_check:FAILED")
+		// If not orphaned, this is always unsafe, so return immediately
+		return result, nil
 	} else {
 		validationChecks = append(validationChecks, "orphan_check:passed")
 	}

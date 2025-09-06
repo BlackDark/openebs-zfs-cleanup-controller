@@ -67,7 +67,7 @@ func LoadConfig() (*Config, error) {
 		ListOperationTimeout:    getDurationEnv("LIST_OPERATION_TIMEOUT", time.Minute*2),
 		NamespaceFilter:         getStringEnv("NAMESPACE_FILTER", ""),
 		LabelSelector:           getStringEnv("LABEL_SELECTOR", ""),
-		PVLabelSelector:         getStringEnv("PV_LABEL_SELECTOR", "pv.kubernetes.io/provisioned-by=zfs.csi.openebs.io"),
+		PVLabelSelector:         getStringEnv("PV_LABEL_SELECTOR", ""),
 		MetricsPort:             getIntEnv("METRICS_PORT", 8080),
 		ProbePort:               getIntEnv("PROBE_PORT", 8081),
 		EnableLeaderElection:    getBoolEnv("ENABLE_LEADER_ELECTION", false),

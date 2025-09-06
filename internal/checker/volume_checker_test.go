@@ -95,7 +95,7 @@ func TestVolumeChecker_IsOrphaned(t *testing.T) {
 				WithObjects(objects...).
 				Build()
 
-			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 			result, err := checker.IsOrphaned(context.TODO(), tt.zfsVolume)
 
 			if tt.expectError && err == nil {
@@ -235,7 +235,7 @@ func TestVolumeChecker_IsOrphaned_EdgeCases(t *testing.T) {
 				WithObjects(objects...).
 				Build()
 
-			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 			result, err := checker.IsOrphaned(context.TODO(), tt.zfsVolume)
 
 			if tt.expectError && err == nil {
@@ -376,7 +376,7 @@ func TestVolumeChecker_FindRelatedPV(t *testing.T) {
 				WithObjects(objects...).
 				Build()
 
-			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 			result, err := checker.FindRelatedPV(context.TODO(), tt.zfsVolume)
 
 			if tt.expectError && err == nil {
@@ -551,7 +551,7 @@ func TestVolumeChecker_FindRelatedPVC(t *testing.T) {
 				WithObjects(objects...).
 				Build()
 
-			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 			result, err := checker.FindRelatedPVC(context.TODO(), tt.pv)
 
 			if tt.expectError && err == nil {
@@ -786,7 +786,7 @@ func TestVolumeChecker_ValidateForDeletion(t *testing.T) {
 				WithObjects(objects...).
 				Build()
 
-			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 			result, err := checker.ValidateForDeletion(context.TODO(), tt.zfsVolume)
 
 			if tt.expectError && err == nil {
@@ -814,14 +814,14 @@ func TestVolumeChecker_DryRunMode(t *testing.T) {
 		WithScheme(scheme).
 		Build()
 
-	// Test dry-run mode
-	dryRunChecker := NewVolumeChecker(fakeClient, logr.Discard(), true, "openebs.io/cas-type=zfs-localpv", true)
+		// Test dry-run mode
+	dryRunChecker := NewVolumeChecker(fakeClient, logr.Discard(), true, "", true)
 	if !dryRunChecker.IsDryRun() {
 		t.Errorf("Expected dry-run mode to be true")
 	}
 
 	// Test normal mode
-	normalChecker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+	normalChecker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 	if normalChecker.IsDryRun() {
 		t.Errorf("Expected dry-run mode to be false")
 	}
@@ -857,12 +857,12 @@ func TestVolumeChecker_LogDeletionAction(t *testing.T) {
 	}
 
 	// Test dry-run mode logging (should not cause errors)
-	dryRunChecker := NewVolumeChecker(fakeClient, logr.Discard(), true, "openebs.io/cas-type=zfs-localpv", true)
+	dryRunChecker := NewVolumeChecker(fakeClient, logr.Discard(), true, "", true)
 	dryRunChecker.LogDeletionAction(zfsVolume, safeValidation)
 	dryRunChecker.LogDeletionAction(zfsVolume, unsafeValidation)
 
 	// Test normal mode logging (should not cause errors)
-	normalChecker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+	normalChecker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 	normalChecker.LogDeletionAction(zfsVolume, safeValidation)
 	normalChecker.LogDeletionAction(zfsVolume, unsafeValidation)
 }
@@ -893,7 +893,7 @@ func TestVolumeChecker_ValidationResult_MultipleErrors(t *testing.T) {
 		},
 	}
 
-	checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+	checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 	result, err := checker.ValidateForDeletion(context.TODO(), zfsVolume)
 
 	if err != nil {
@@ -1019,7 +1019,7 @@ func TestVolumeChecker_ValidateForDeletion_MixedFinalizers(t *testing.T) {
 				WithObjects(objects...).
 				Build()
 
-			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "openebs.io/cas-type=zfs-localpv", true)
+			checker := NewVolumeChecker(fakeClient, logr.Discard(), false, "", true)
 			result, err := checker.ValidateForDeletion(context.TODO(), tt.zfsVolume)
 
 			if tt.expectError && err == nil {
