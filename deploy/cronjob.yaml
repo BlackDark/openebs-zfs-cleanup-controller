@@ -16,7 +16,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: cronjob
-              image: <REPLACE_WITH_IMAGE>
+              image: ghcr.io/blackdark/openebs-zfs-cleanup-controller:latest
               imagePullPolicy: IfNotPresent
               args:
                 - "--mode=cronjob"

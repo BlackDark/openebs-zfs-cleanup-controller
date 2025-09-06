@@ -62,19 +62,19 @@ func TestLoadConfig_EnvironmentVariables(t *testing.T) {
 	clearEnvVars()
 
 	// Set environment variables
-	os.Setenv("DRY_RUN", "true")
-	os.Setenv("RECONCILE_INTERVAL", "30m")
-	os.Setenv("MAX_CONCURRENT_RECONCILES", "5")
-	os.Setenv("RETRY_BACKOFF_BASE", "2s")
-	os.Setenv("MAX_RETRY_ATTEMPTS", "5")
-	os.Setenv("NAMESPACE_FILTER", "openebs")
-	os.Setenv("LABEL_SELECTOR", "app=zfs")
-	os.Setenv("API_RATE_LIMIT", "25.5")
-	os.Setenv("API_BURST", "50")
-	os.Setenv("RECONCILE_TIMEOUT", "10m")
-	os.Setenv("LIST_OPERATION_TIMEOUT", "5m")
-	os.Setenv("LOG_LEVEL", "debug")
-	os.Setenv("LOG_FORMAT", "text")
+	_ = os.Setenv("DRY_RUN", "true")
+	_ = os.Setenv("RECONCILE_INTERVAL", "30m")
+	_ = os.Setenv("MAX_CONCURRENT_RECONCILES", "5")
+	_ = os.Setenv("RETRY_BACKOFF_BASE", "2s")
+	_ = os.Setenv("MAX_RETRY_ATTEMPTS", "5")
+	_ = os.Setenv("NAMESPACE_FILTER", "openebs")
+	_ = os.Setenv("LABEL_SELECTOR", "app=zfs")
+	_ = os.Setenv("API_RATE_LIMIT", "25.5")
+	_ = os.Setenv("API_BURST", "50")
+	_ = os.Setenv("RECONCILE_TIMEOUT", "10m")
+	_ = os.Setenv("LIST_OPERATION_TIMEOUT", "5m")
+	_ = os.Setenv("LOG_LEVEL", "debug")
+	_ = os.Setenv("LOG_FORMAT", "text")
 
 	defer clearEnvVars()
 
@@ -337,8 +337,8 @@ func TestConfig_String(t *testing.T) {
 
 func TestGetBoolEnv_InvalidValue(t *testing.T) {
 	clearEnvVars()
-	os.Setenv("TEST_BOOL", "invalid")
-	defer os.Unsetenv("TEST_BOOL")
+	_ = os.Setenv("TEST_BOOL", "invalid")
+	defer func() { _ = os.Unsetenv("TEST_BOOL") }()
 
 	result := getBoolEnv("TEST_BOOL", true)
 	if result != true {
@@ -348,8 +348,8 @@ func TestGetBoolEnv_InvalidValue(t *testing.T) {
 
 func TestGetIntEnv_InvalidValue(t *testing.T) {
 	clearEnvVars()
-	os.Setenv("TEST_INT", "invalid")
-	defer os.Unsetenv("TEST_INT")
+	_ = os.Setenv("TEST_INT", "invalid")
+	defer func() { _ = os.Unsetenv("TEST_INT") }()
 
 	result := getIntEnv("TEST_INT", 42)
 	if result != 42 {
@@ -359,8 +359,8 @@ func TestGetIntEnv_InvalidValue(t *testing.T) {
 
 func TestGetDurationEnv_InvalidValue(t *testing.T) {
 	clearEnvVars()
-	os.Setenv("TEST_DURATION", "invalid")
-	defer os.Unsetenv("TEST_DURATION")
+	_ = os.Setenv("TEST_DURATION", "invalid")
+	defer func() { _ = os.Unsetenv("TEST_DURATION") }()
 
 	result := getDurationEnv("TEST_DURATION", time.Hour)
 	if result != time.Hour {
@@ -406,7 +406,7 @@ func clearEnvVars() {
 	}
 
 	for _, env := range envVars {
-		os.Unsetenv(env)
+		_ = os.Unsetenv(env)
 	}
 }
 func TestValidate_InvalidAPIRateLimit(t *testing.T) {
@@ -517,8 +517,8 @@ func TestValidate_InvalidListOperationTimeout(t *testing.T) {
 
 func TestGetFloat64Env_ValidValue(t *testing.T) {
 	clearEnvVars()
-	os.Setenv("TEST_FLOAT", "25.5")
-	defer os.Unsetenv("TEST_FLOAT")
+	_ = os.Setenv("TEST_FLOAT", "25.5")
+	defer func() { _ = os.Unsetenv("TEST_FLOAT") }()
 
 	result := getFloat64Env("TEST_FLOAT", 10.0)
 	if result != 25.5 {
@@ -528,8 +528,8 @@ func TestGetFloat64Env_ValidValue(t *testing.T) {
 
 func TestGetFloat64Env_InvalidValue(t *testing.T) {
 	clearEnvVars()
-	os.Setenv("TEST_FLOAT", "invalid")
-	defer os.Unsetenv("TEST_FLOAT")
+	_ = os.Setenv("TEST_FLOAT", "invalid")
+	defer func() { _ = os.Unsetenv("TEST_FLOAT") }()
 
 	result := getFloat64Env("TEST_FLOAT", 42.5)
 	if result != 42.5 {

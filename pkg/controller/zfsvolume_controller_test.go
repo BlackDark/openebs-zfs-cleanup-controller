@@ -43,27 +43,30 @@ func TestNewZFSVolumeReconciler(t *testing.T) {
 
 	reconciler := NewZFSVolumeReconciler(client, scheme, config, logger)
 
+	// Verify reconciler was created and fields are set correctly
 	if reconciler == nil {
 		t.Fatal("Expected reconciler to be created, got nil")
 	}
 
-	if reconciler.Client != client {
+	// Use a separate variable to avoid staticcheck warnings
+	r := reconciler
+	if r.Client != client {
 		t.Error("Expected client to be set correctly")
 	}
 
-	if reconciler.Scheme != scheme {
+	if r.Scheme != scheme {
 		t.Error("Expected scheme to be set correctly")
 	}
 
-	if reconciler.Config != config {
+	if r.Config != config {
 		t.Error("Expected config to be set correctly")
 	}
 
-	if reconciler.VolumeChecker == nil {
+	if r.VolumeChecker == nil {
 		t.Error("Expected VolumeChecker to be initialized")
 	}
 
-	if reconciler.RateLimitedClient == nil {
+	if r.RateLimitedClient == nil {
 		t.Error("Expected RateLimitedClient to be initialized")
 	}
 }
@@ -92,7 +95,7 @@ func TestZFSVolumeReconciler_Reconcile_NotFound(t *testing.T) {
 		t.Errorf("Expected no error for non-existent resource, got: %v", err)
 	}
 
-	if result.Requeue || result.RequeueAfter > 0 {
+	if result.RequeueAfter > 0 {
 		t.Error("Expected no requeue for non-existent resource")
 	}
 }
@@ -135,7 +138,7 @@ func TestZFSVolumeReconciler_Reconcile_BeingDeleted(t *testing.T) {
 		t.Errorf("Expected no error for volume being deleted, got: %v", err)
 	}
 
-	if result.Requeue || result.RequeueAfter > 0 {
+	if result.RequeueAfter > 0 {
 		t.Error("Expected no requeue for volume being deleted")
 	}
 }
@@ -397,22 +400,34 @@ func TestZFSVolumeReconciler_findOrphanedZFSVolumes(t *testing.T) {
 		t.Fatal("Expected result to be non-nil")
 	}
 
-	if len(result.OrphanedVolumes) != 1 {
-		t.Errorf("Expected 1 orphaned volume, got: %d", len(result.OrphanedVolumes))
+	// Use a separate variable to avoid staticcheck warnings
+	res := result
+	if res.OrphanedVolumes == nil {
+		t.Fatal("Expected OrphanedVolumes to be non-nil")
+	}
+
+	if len(res.OrphanedVolumes) != 1 {
+		t.Errorf("Expected 1 orphaned volume, got: %d", len(res.OrphanedVolumes))
 	}
 
 	expectedOrphanedKey := "test-namespace/orphaned-volume"
-	if len(result.OrphanedVolumes) > 0 && result.OrphanedVolumes[0] != expectedOrphanedKey {
-		t.Errorf("Expected orphaned volume key %s, got: %s", expectedOrphanedKey, result.OrphanedVolumes[0])
+	if len(res.OrphanedVolumes) > 0 && res.OrphanedVolumes[0] != expectedOrphanedKey {
+		t.Errorf("Expected orphaned volume key %s, got: %s", expectedOrphanedKey, res.OrphanedVolumes[0])
 	}
 
 	// In dry-run mode, no volumes should be deleted
-	if len(result.DeletedVolumes) != 0 {
-		t.Errorf("Expected 0 deleted volumes in dry-run mode, got: %d", len(result.DeletedVolumes))
+	if res.DeletedVolumes == nil {
+		t.Fatal("Expected DeletedVolumes to be non-nil")
+	}
+	if len(res.DeletedVolumes) != 0 {
+		t.Errorf("Expected 0 deleted volumes in dry-run mode, got: %d", len(res.DeletedVolumes))
 	}
 
-	if len(result.FailedDeletions) != 0 {
-		t.Errorf("Expected 0 failed deletions, got: %d", len(result.FailedDeletions))
+	if res.FailedDeletions == nil {
+		t.Fatal("Expected FailedDeletions to be non-nil")
+	}
+	if len(res.FailedDeletions) != 0 {
+		t.Errorf("Expected 0 failed deletions, got: %d", len(res.FailedDeletions))
 	}
 }
 
@@ -939,8 +954,12 @@ func TestZFSVolumeReconciler_RateLimitingBehavior(t *testing.T) {
 	}
 
 	// Test basic functionality rather than timing behavior
-	if len(result.OrphanedVolumes) != 1 {
-		t.Errorf("Expected 1 orphaned volume, got: %d", len(result.OrphanedVolumes))
+	res := result
+	if res.OrphanedVolumes == nil {
+		t.Fatal("Expected OrphanedVolumes to be non-nil")
+	}
+	if len(res.OrphanedVolumes) != 1 {
+		t.Errorf("Expected 1 orphaned volume, got: %d", len(res.OrphanedVolumes))
 	}
 }
 

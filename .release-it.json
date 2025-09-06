@@ -1,0 +1,40 @@
+{
+  "npm": false,
+  "git": {
+    "commitMessage": "chore: release ${version}",
+    "requireCleanWorkingDir": false
+  },
+  "github": {
+    "release": true,
+    "comments": {
+      "submit": false
+    }
+  },
+  "plugins": {
+    "@release-it/conventional-changelog": {
+      "preset": {
+        "name": "conventionalcommits",
+        "types": [
+          {
+            "type": "feat",
+            "section": "Features"
+          },
+          {
+            "type": "fix",
+            "section": "Bug Fixes"
+          },
+          {
+            "type": "refactor",
+            "section": "(internal) Refactorings"
+          }
+        ]
+      },
+      "infile": "CHANGELOG.md",
+      "header": "# Changelog\n\nAll notable changes to this project will be documented in this file.\n"
+    }
+  },
+  "hooks": {
+    "before:git:release": ["git add ."],
+    "after:release": "echo \"RELEASED_VERSION=${version}\" >> $GITHUB_ENV"
+  }
+}

@@ -16,7 +16,7 @@ spec:
       serviceAccountName: openebs-zfs-cleanup-controller
       containers:
         - name: controller
-          image: <REPLACE_WITH_IMAGE>
+          image: ghcr.io/blackdark/openebs-zfs-cleanup-controller:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: CONFIG_PATH

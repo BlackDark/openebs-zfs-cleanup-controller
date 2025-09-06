@@ -94,3 +94,21 @@ deploy: ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 .PHONY: undeploy
 undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config.
 	kubectl delete -f config/
+
+golangcilint-docker-lint: ## Run linters in the Docker container.
+	docker run --rm -t -v $(shell pwd):/app -w /app \
+	--user $(shell id -u):$(shell id -g) \
+	-v $(shell go env GOCACHE):/go/cache/build -e GOCACHE=/go/cache/build \
+	-v $(shell go env GOMODCACHE):/go/cache/mod -e GOMODCACHE=/go/cache/mod \
+	-v ~/.cache/golangci-lint:/golangci-lint/cache -e GOLANGCI_LINT_CACHE=/golangci-lint/cache \
+	--tmpfs /.cache:rw,noexec,nosuid,size=100m \
+	golangci/golangci-lint:v2.4.0 golangci-lint run
+
+golangcilint-docker-fmt: ## Run linters in the Docker container.
+	docker run --rm -t -v $(shell pwd):/app -w /app \
+	--user $(shell id -u):$(shell id -g) \
+	-v $(shell go env GOCACHE):/go/cache/build -e GOCACHE=/go/cache/build \
+	-v $(shell go env GOMODCACHE):/go/cache/mod -e GOMODCACHE=/go/cache/mod \
+	-v ~/.cache/golangci-lint:/golangci-lint/cache -e GOLANGCI_LINT_CACHE=/golangci-lint/cache \
+	--tmpfs /.cache:rw,noexec,nosuid,size=100m \
+	golangci/golangci-lint:v2.4.0 golangci-lint fmt

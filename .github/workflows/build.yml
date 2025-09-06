@@ -77,8 +77,8 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Docker meta for OpenEBS ZFS Cleanup Controller
         id: meta_zfs_gc
@@ -86,8 +86,8 @@ jobs:
         with:
           # list of Docker images to use as base name for tags
           images: |
-            ghcr.io/${{ github.repository_owner }}/{{ env.IMAGE_NAME }}
-            docker.io/${{ github.repository_owner }}/{{ env.IMAGE_NAME }},enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'false' }}
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+            docker.io/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }},enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'false' }}
           # generate Docker tags based on the following events/attributes
           tags: |
             type=ref,event=branch,prefix=dev-,enable=${{ steps.set_platforms.outputs.MANUAL_RUN == 'true' }}

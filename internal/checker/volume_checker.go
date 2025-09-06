@@ -173,8 +173,8 @@ func (vc *VolumeChecker) populatePVCache(ctx context.Context, logger logr.Logger
 
 	// Build PV cache indexed by CSI volumeHandle
 	for i, pv := range allPVs {
-		if pv.Spec.PersistentVolumeSource.CSI != nil {
-			volumeHandle := pv.Spec.PersistentVolumeSource.CSI.VolumeHandle
+		if pv.Spec.CSI != nil {
+			volumeHandle := pv.Spec.CSI.VolumeHandle
 			if volumeHandle != "" {
 				vc.pvCache[volumeHandle] = &allPVs[i] // Store reference to the PV
 			}
@@ -699,11 +699,11 @@ func (vc *VolumeChecker) FindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVol
 			"pvIndex", i+1,
 			"pvName", pv.Name,
 			"pvPhase", pv.Status.Phase,
-			"hasCSI", pv.Spec.PersistentVolumeSource.CSI != nil)
+			"hasCSI", pv.Spec.CSI != nil)
 
 		// First, try CSI volumeHandle matching
-		if pv.Spec.PersistentVolumeSource.CSI != nil {
-			volumeHandle := pv.Spec.PersistentVolumeSource.CSI.VolumeHandle
+		if pv.Spec.CSI != nil {
+			volumeHandle := pv.Spec.CSI.VolumeHandle
 			logger.V(2).Info("Checking CSI volumeHandle",
 				"pvName", pv.Name,
 				"volumeHandle", volumeHandle,
@@ -790,10 +790,10 @@ func (vc *VolumeChecker) FindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVol
 				"pvIndex", i+1,
 				"pvName", pv.Name,
 				"pvPhase", pv.Status.Phase,
-				"hasCSI", pv.Spec.PersistentVolumeSource.CSI != nil)
+				"hasCSI", pv.Spec.CSI != nil)
 
-			if pv.Spec.PersistentVolumeSource.CSI != nil {
-				volumeHandle := pv.Spec.PersistentVolumeSource.CSI.VolumeHandle
+			if pv.Spec.CSI != nil {
+				volumeHandle := pv.Spec.CSI.VolumeHandle
 				logger.V(2).Info("Fallback: Checking CSI volumeHandle",
 					"pvName", pv.Name,
 					"volumeHandle", volumeHandle,

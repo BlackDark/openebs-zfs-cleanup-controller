@@ -52,12 +52,13 @@ func TestNewControllerManager(t *testing.T) {
 			if !tt.wantErr {
 				if cm == nil {
 					t.Error("NewControllerManager() returned nil without error")
-				}
-				if cm.manager == nil {
-					t.Error("NewControllerManager() returned manager with nil internal manager")
-				}
-				if cm.config != tt.config {
-					t.Error("NewControllerManager() config not properly set")
+				} else {
+					if cm.manager == nil {
+						t.Error("NewControllerManager() returned manager with nil internal manager")
+					}
+					if cm.config != tt.config {
+						t.Error("NewControllerManager() config not properly set")
+					}
 				}
 			}
 		})

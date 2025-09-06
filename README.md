@@ -3,13 +3,23 @@
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://golang.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker)](https://docker.com/)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-Compatible-326CE5?style=flat&logo=kubernetes)](https://kubernetes.io/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
+[![GitHub License](https://img.shields.io/github/license/blackdark93/openebs-zfs-cleanup-controller)](https://github.com/raydak-labs/configarr/blob/main/LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/raydak-labs/configarr?logo=github)](https://github.com/blackdark/openebs-zfs-cleanup-controller/releases/)
+[![Docker](https://img.shields.io/docker/v/blackdark93/openebs-zfs-cleanup-controller?sort=semver&label=DockerHub)](https://hub.docker.com/r/blackdark93/openebs-zfs-cleanup-controller)
+[![Docker Pulls](https://img.shields.io/docker/pulls/blackdark93/openebs-zfs-cleanup-controller?label=DockerHub-Pulls)](https://hub.docker.com/r/blackdark93/openebs-zfs-cleanup-controller)
 
 An automated cleanup controller for orphaned ZFSVolume Custom Resource Definitions (CRDs) in Kubernetes clusters using OpenEBS with ZFS storage.
 
 ## 📋 Overview
 
 This controller identifies ZFSVolumes that are no longer associated with any PersistentVolume (PV) or PersistentVolumeClaim (PVC) and safely removes them to prevent resource accumulation and maintain cluster hygiene.
+
+## Docker
+
+```yml
+ghcr.io/blackdark/openebs-zfs-cleanup-controller:latest
+docker.io/blackdark93/openebs-zfs-cleanup-controller:latest
+```
 
 ## ✨ Features
 
