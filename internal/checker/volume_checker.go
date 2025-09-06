@@ -462,7 +462,7 @@ func (vc *VolumeChecker) ValidateForDeletion(ctx context.Context, zfsVol *zfsv1.
 		result.ValidationErrors = append(result.ValidationErrors, "volume has active PV or PVC references")
 		logger.Info("ZFSVolume is not orphaned, not safe to delete",
 			"validationResult", "FAILED")
-		validationChecks = append(validationChecks, "orphan_check:FAILED")
+		_ = append(validationChecks, "orphan_check:FAILED")
 		return result, nil
 	} else {
 		validationChecks = append(validationChecks, "orphan_check:passed")
@@ -560,7 +560,7 @@ func (vc *VolumeChecker) ValidateForDeletion(ctx context.Context, zfsVol *zfsv1.
 		result.ValidationErrors = append(result.ValidationErrors, "volume has active PV or PVC references")
 		logger.Info("ZFSVolume is not orphaned, not safe to delete",
 			"validationResult", "FAILED")
-		validationChecks = append(validationChecks, "orphan_check:FAILED")
+		_ = append(validationChecks, "orphan_check:FAILED")
 		// If not orphaned, this is always unsafe, so return immediately
 		return result, nil
 	} else {
