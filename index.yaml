@@ -1,0 +1,36 @@
+apiVersion: v1
+entries:
+  openebs-zfs-cleanup-controller:
+  - apiVersion: v2
+    appVersion: 0.1.0
+    created: "2025-09-06T17:13:24.906426426Z"
+    description: A Helm chart for OpenEBS ZFS Volume Cleanup Controller
+    digest: a20aca3c6c4b23f827a6d5b2c0e9133325aa5c53a41ee1b75ad5ad975068c267
+    home: https://github.com/BlackDark/openebs-zfs-cleanup-controller
+    keywords:
+    - openebs
+    - zfs
+    - cleanup
+    - garbage-collection
+    - kubernetes
+    maintainers:
+    - name: BlackDark
+    name: openebs-zfs-cleanup-controller
+    sources:
+    - https://github.com/BlackDark/openebs-zfs-cleanup-controller
+    type: application
+    urls:
+    - https://github.com/BlackDark/openebs-zfs-cleanup-controller/releases/download/openebs-zfs-cleanup-controller-1.0.0/openebs-zfs-cleanup-controller-1.0.0.tgz
+    version: 1.0.0
+  openebs-zfs-cleanup-controller2:
+  - apiVersion: v2
+    appVersion: 1.16.0
+    created: "2025-09-06T17:13:25.131647826Z"
+    description: A Helm chart for Kubernetes
+    digest: e8050f37fb54f0832b76cdb81a65228ba6dca54fc4dcd4ac1d7187ed2d25502e
+    name: openebs-zfs-cleanup-controller2
+    type: application
+    urls:
+    - https://github.com/BlackDark/openebs-zfs-cleanup-controller/releases/download/openebs-zfs-cleanup-controller2-0.1.0/openebs-zfs-cleanup-controller2-0.1.0.tgz
+    version: 0.1.0
+generated: "2025-09-06T17:13:25.131658446Z"
