@@ -23,9 +23,9 @@ spec:
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               args:
                 - "--mode=cronjob"
-              env:
-                - name: CONFIG_PATH
-                  value: /etc/openebs-zfs-cleanup/config.yaml
+              envFrom:
+                - configMapRef:
+                    name: {{ include "openebs-zfs-cleanup-controller.fullname" . }}-config
               volumeMounts:
                 - name: config
                   mountPath: /etc/openebs-zfs-cleanup

@@ -44,18 +44,18 @@ service:
 
 # Configuration for the ZFS cleanup controller
 config:
-  dryRun: true
-  reconcileInterval: 60s
-  maxConcurrentReconciles: 2
-  retryBackoffBase: 500ms
-  maxRetryAttempts: 5
-  apiRateLimit: 10.0
-  apiBurst: 15
-  namespaceFilter: ""
-  labelSelector: ""
+  dryRun: true # set to false to enable the deletion
+  # reconcileInterval: 60s
+  # maxConcurrentReconciles: 2
+  # retryBackoffBase: 500ms
+  # maxRetryAttempts: 5
+  # apiRateLimit: 10.0
+  # apiBurst: 15
+  # namespaceFilter: ""
+  # labelSelector: ""
   metricsPort: 8080
   probePort: 8081
-  enableLeaderElection: false
+  # enableLeaderElection: false
   logLevel: "info"
   logFormat: "json"
 

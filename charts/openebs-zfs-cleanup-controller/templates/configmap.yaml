@@ -5,18 +5,45 @@ metadata:
   labels:
     {{- include "openebs-zfs-cleanup-controller.labels" . | nindent 4 }}
 data:
-  config.yaml: |
-    dryRun: {{ .Values.config.dryRun }}
-    reconcileInterval: {{ .Values.config.reconcileInterval }}
-    maxConcurrentReconciles: {{ .Values.config.maxConcurrentReconciles }}
-    retryBackoffBase: {{ .Values.config.retryBackoffBase }}
-    maxRetryAttempts: {{ .Values.config.maxRetryAttempts }}
-    apiRateLimit: {{ .Values.config.apiRateLimit }}
-    apiBurst: {{ .Values.config.apiBurst }}
-    namespaceFilter: {{ .Values.config.namespaceFilter | quote }}
-    labelSelector: {{ .Values.config.labelSelector | quote }}
-    metricsPort: {{ .Values.config.metricsPort }}
-    probePort: {{ .Values.config.probePort }}
-    enableLeaderElection: {{ .Values.config.enableLeaderElection }}
-    logLevel: {{ .Values.config.logLevel | quote }}
-    logFormat: {{ .Values.config.logFormat | quote }}
+  {{- if hasKey .Values.config "dryRun" }}
+  DRY_RUN: "{{ .Values.config.dryRun }}"
+  {{- end }}
+  {{- if hasKey .Values.config "reconcileInterval" }}
+  RECONCILE_INTERVAL: "{{ .Values.config.reconcileInterval }}"
+  {{- end }}
+  {{- if hasKey .Values.config "maxConcurrentReconciles" }}
+  MAX_CONCURRENT_RECONCILES: "{{ .Values.config.maxConcurrentReconciles }}"
+  {{- end }}
+  {{- if hasKey .Values.config "retryBackoffBase" }}
+  RETRY_BACKOFF_BASE: "{{ .Values.config.retryBackoffBase }}"
+  {{- end }}
+  {{- if hasKey .Values.config "maxRetryAttempts" }}
+  MAX_RETRY_ATTEMPTS: "{{ .Values.config.maxRetryAttempts }}"
+  {{- end }}
+  {{- if hasKey .Values.config "apiRateLimit" }}
+  API_RATE_LIMIT: "{{ .Values.config.apiRateLimit }}"
+  {{- end }}
+  {{- if hasKey .Values.config "apiBurst" }}
+  API_BURST: "{{ .Values.config.apiBurst }}"
+  {{- end }}
+  {{- if hasKey .Values.config "namespaceFilter" }}
+  NAMESPACE_FILTER: "{{ .Values.config.namespaceFilter }}"
+  {{- end }}
+  {{- if hasKey .Values.config "labelSelector" }}
+  LABEL_SELECTOR: "{{ .Values.config.labelSelector }}"
+  {{- end }}
+  {{- if hasKey .Values.config "metricsPort" }}
+  METRICS_PORT: "{{ .Values.config.metricsPort }}"
+  {{- end }}
+  {{- if hasKey .Values.config "probePort" }}
+  PROBE_PORT: "{{ .Values.config.probePort }}"
+  {{- end }}
+  {{- if hasKey .Values.config "enableLeaderElection" }}
+  ENABLE_LEADER_ELECTION: "{{ .Values.config.enableLeaderElection }}"
+  {{- end }}
+  {{- if hasKey .Values.config "logLevel" }}
+  LOG_LEVEL: "{{ .Values.config.logLevel }}"
+  {{- end }}
+  {{- if hasKey .Values.config "logFormat" }}
+  LOG_FORMAT: "{{ .Values.config.logFormat }}"
+  {{- end }}
