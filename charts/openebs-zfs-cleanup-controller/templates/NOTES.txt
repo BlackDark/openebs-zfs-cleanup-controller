@@ -1,0 +1,33 @@
+OpenEBS ZFS Cleanup Controller has been successfully deployed!
+
+{{- if eq .Values.mode "deployment" }}
+The controller is running in continuous reconciliation mode via Deployment.
+{{- else if eq .Values.mode "cronjob" }}
+The controller is running in scheduled cleanup mode via CronJob ({{ .Values.cronJob.schedule }}).
+{{- end }}
+
+To check the status:
+  kubectl get pods -n {{ .Values.namespace }}
+{{- if eq .Values.mode "cronjob" }}
+  kubectl get cronjob -n {{ .Values.namespace }}
+{{- end }}
+
+To view logs:
+{{- if eq .Values.mode "deployment" }}
+  kubectl logs -n {{ .Values.namespace }} deployment/{{ include "openebs-zfs-cleanup-controller.fullname" . }}
+{{- else if eq .Values.mode "cronjob" }}
+  kubectl logs -n {{ .Values.namespace }} -l app={{ include "openebs-zfs-cleanup-controller.fullname" . }}-cronjob
+{{- end }}
+
+{{- if eq .Values.mode "deployment" }}
+To check metrics (if Prometheus is configured):
+  kubectl port-forward -n {{ .Values.namespace }} svc/{{ include "openebs-zfs-cleanup-controller.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  # Then visit http://localhost:{{ .Values.service.port }}/metrics
+{{- end }}
+
+Configuration is stored in ConfigMap: {{ include "openebs-zfs-cleanup-controller.fullname" . }}-config
+
+{{- if .Values.config.dryRun }}
+⚠️  DRY RUN MODE: The controller will not actually delete any resources.
+   Set config.dryRun to false in values.yaml to enable actual cleanup.
+{{- end }}

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: openebs-zfs-cleanup-controller
+description: A Helm chart for OpenEBS ZFS Volume Cleanup Controller
+home: https://github.com/BlackDark/openebs-zfs-cleanup-controller
+sources:
+  - https://github.com/BlackDark/openebs-zfs-cleanup-controller
+keywords:
+  - openebs
+  - zfs
+  - cleanup
+  - garbage-collection
+  - kubernetes
+maintainers:
+  - name: BlackDark
+type: application
+version: 1.0.0
+appVersion: "0.1.0"

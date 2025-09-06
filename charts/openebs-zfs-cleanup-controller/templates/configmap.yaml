@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "openebs-zfs-cleanup-controller.fullname" . }}-config
+  labels:
+    {{- include "openebs-zfs-cleanup-controller.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    dryRun: {{ .Values.config.dryRun }}
+    reconcileInterval: {{ .Values.config.reconcileInterval }}
+    maxConcurrentReconciles: {{ .Values.config.maxConcurrentReconciles }}
+    retryBackoffBase: {{ .Values.config.retryBackoffBase }}
+    maxRetryAttempts: {{ .Values.config.maxRetryAttempts }}
+    apiRateLimit: {{ .Values.config.apiRateLimit }}
+    apiBurst: {{ .Values.config.apiBurst }}
+    namespaceFilter: {{ .Values.config.namespaceFilter | quote }}
+    labelSelector: {{ .Values.config.labelSelector | quote }}
+    metricsPort: {{ .Values.config.metricsPort }}
+    probePort: {{ .Values.config.probePort }}
+    enableLeaderElection: {{ .Values.config.enableLeaderElection }}
+    logLevel: {{ .Values.config.logLevel | quote }}
+    logFormat: {{ .Values.config.logFormat | quote }}

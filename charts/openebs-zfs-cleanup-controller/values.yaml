@@ -1,0 +1,99 @@
+# Default values for openebs-zfs-cleanup-controller.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Deployment mode: "deployment" for continuous reconciliation, "cronjob" for scheduled cleanup
+mode: deployment
+
+# Number of controller replicas (only used in deployment mode)
+replicaCount: 1
+
+# Docker image configuration
+image:
+  repository: ghcr.io/blackdark/openebs-zfs-cleanup-controller
+  pullPolicy: IfNotPresent
+  # tag: ""  # Uses Chart.AppVersion by default, override if needed
+
+# Image pull secrets for private registries
+imagePullSecrets: []
+
+# Override the chart name
+nameOverride: ""
+fullnameOverride: ""
+
+# Service account configuration
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# Pod annotations and labels
+podAnnotations: {}
+podLabels: {}
+
+# Security contexts
+podSecurityContext: {}
+securityContext: {}
+
+# Service configuration for metrics and health endpoints (only used in deployment mode)
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+# Configuration for the ZFS cleanup controller
+config:
+  dryRun: true
+  reconcileInterval: 60s
+  maxConcurrentReconciles: 2
+  retryBackoffBase: 500ms
+  maxRetryAttempts: 5
+  apiRateLimit: 10.0
+  apiBurst: 15
+  namespaceFilter: ""
+  labelSelector: ""
+  metricsPort: 8080
+  probePort: 8081
+  enableLeaderElection: false
+  logLevel: "info"
+  logFormat: "json"
+
+# CronJob configuration (only used in cronjob mode)
+cronJob:
+  enabled: true
+  schedule: "0 2 * * *" # Daily at 2am
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Resource limits and requests
+resources:
+  {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# Health probes (only used in deployment mode)
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8081
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8081
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# Node selector, tolerations, and affinity
+nodeSelector: {}
+tolerations: []
+affinity: {}

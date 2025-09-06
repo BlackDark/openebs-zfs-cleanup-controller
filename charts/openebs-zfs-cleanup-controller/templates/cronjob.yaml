@@ -1,0 +1,36 @@
+{{- if eq .Values.mode "cronjob" -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "openebs-zfs-cleanup-controller.fullname" . }}-cronjob
+  labels:
+    {{- include "openebs-zfs-cleanup-controller.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cronJob.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "openebs-zfs-cleanup-controller.labels" . | nindent 12 }}
+            app: {{ include "openebs-zfs-cleanup-controller.fullname" . }}-cronjob
+        spec:
+          serviceAccountName: {{ include "openebs-zfs-cleanup-controller.serviceAccountName" . }}
+          restartPolicy: OnFailure
+          containers:
+            - name: cronjob
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              args:
+                - "--mode=cronjob"
+              env:
+                - name: CONFIG_PATH
+                  value: /etc/openebs-zfs-cleanup/config.yaml
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/openebs-zfs-cleanup
+          volumes:
+            - name: config
+              configMap:
+                name: {{ include "openebs-zfs-cleanup-controller.fullname" . }}-config
+{{- end }}

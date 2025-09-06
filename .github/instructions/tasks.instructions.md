@@ -151,7 +151,16 @@
   - Verify all tests pass and builds succeed
   - _Requirements: Performance optimization for batch vs real-time processing_
 
-- [ ] 20. Create end-to-end testing framework
+- [x] 20. Create Helm chart with mode selection
+
+  - Create comprehensive Helm chart with conditional templating
+  - Implement mode selection (deployment vs cronjob) to prevent conflicts
+  - Add proper RBAC, ConfigMap, Service, and health check configurations
+  - Update documentation and examples for mode-specific deployment
+  - Test both deployment modes to ensure correct resource rendering
+  - _Requirements: Production-ready deployment with flexible operation modes_
+
+- [ ] 21. Create end-to-end testing framework
   - Build test harness that creates realistic OpenEBS ZFS scenarios
   - Test complete workflows from volume creation to cleanup
   - Verify metrics accuracy and logging completeness

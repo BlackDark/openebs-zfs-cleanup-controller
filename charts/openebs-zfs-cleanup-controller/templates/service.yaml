@@ -1,0 +1,25 @@
+{{- if eq .Values.mode "deployment" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openebs-zfs-cleanup-controller.fullname" . }}
+  labels:
+    {{- include "openebs-zfs-cleanup-controller.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    - port: {{ .Values.config.probePort }}
+      targetPort: health
+      protocol: TCP
+      name: health
+  selector:
+    {{- include "openebs-zfs-cleanup-controller.selectorLabels" . | nindent 4 }}
+{{- end }}
