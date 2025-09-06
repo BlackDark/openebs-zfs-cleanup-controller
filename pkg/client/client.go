@@ -120,7 +120,7 @@ func ValidateZFSVolumeCRD(ctx context.Context, c client.Client) error {
 		return fmt.Errorf("ZFSVolume CRD not available or accessible: %w", err)
 	}
 
-	log.FromContext(ctx).Info("ZFSVolume CRD validation successful")
+	log.FromContext(ctx).V(1).Info("ZFSVolume CRD validation successful")
 	return nil
 }
 
