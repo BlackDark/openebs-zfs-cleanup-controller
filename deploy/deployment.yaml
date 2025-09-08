@@ -18,9 +18,9 @@ spec:
         - name: controller
           image: ghcr.io/blackdark/openebs-zfs-cleanup-controller:latest
           imagePullPolicy: IfNotPresent
-          env:
-            - name: CONFIG_PATH
-              value: /etc/openebs-zfs-cleanup/config.yaml
+          envFrom:
+            - configMapRef:
+                name: openebs-zfs-cleanup-config
           ports:
             - containerPort: 8080 # metrics
             - containerPort: 8081 # health probes
@@ -36,10 +36,3 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
-          volumeMounts:
-            - name: config
-              mountPath: /etc/openebs-zfs-cleanup
-      volumes:
-        - name: config
-          configMap:
-            name: openebs-zfs-cleanup-config

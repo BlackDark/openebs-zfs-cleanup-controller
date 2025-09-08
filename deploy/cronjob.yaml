@@ -20,13 +20,6 @@ spec:
               imagePullPolicy: IfNotPresent
               args:
                 - "--mode=cronjob"
-              env:
-                - name: CONFIG_PATH
-                  value: /etc/openebs-zfs-cleanup/config.yaml
-              volumeMounts:
-                - name: config
-                  mountPath: /etc/openebs-zfs-cleanup
-          volumes:
-            - name: config
-              configMap:
-                name: openebs-zfs-cleanup-config
+              envFrom:
+                - configMapRef:
+                    name: openebs-zfs-cleanup-config

@@ -4,18 +4,15 @@ metadata:
   name: openebs-zfs-cleanup-config
   namespace: openebs
 data:
-  config.yaml: |
-    dryRun: true
-    reconcileInterval: 60s
-    maxConcurrentReconciles: 2
-    retryBackoffBase: 500ms
-    maxRetryAttempts: 5
-    apiRateLimit: 10.0
-    apiBurst: 15
-    namespaceFilter: ""
-    labelSelector: ""
-    metricsPort: 8080
-    probePort: 8081
-    enableLeaderElection: false
-    logLevel: "info"
-    logFormat: "json"
+  # Only set non-defaults here. Uncomment to override application defaults.
+  DRY_RUN: "true"
+  # RECONCILE_INTERVAL: "1h"
+  # LOG_LEVEL: "info"
+  # MAX_CONCURRENT_RECONCILES: "1"
+  # RETRY_BACKOFF_BASE: "1s"
+  # MAX_RETRY_ATTEMPTS: "3"
+  # API_RATE_LIMIT: "10.0"
+  # API_BURST: "15"
+  # METRICS_PORT: "8080"
+  # PROBE_PORT: "8081"
+  # ENABLE_LEADER_ELECTION: "false"

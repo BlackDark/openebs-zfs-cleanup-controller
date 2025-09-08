@@ -107,74 +107,9 @@ NAMESPACE_FILTER="default"
 LOG_LEVEL=debug
 ```
 
-### 📦 Example ConfigMap
+## 🚀 Deployment 
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-	name: zfsvolume-cleanup-config
-	namespace: kube-system
-data:
-	DRY_RUN: "false"
-	RECONCILE_INTERVAL: "1h"
-	MAX_CONCURRENT_RECONCILES: "1"
-	LOG_LEVEL: "info"
-```
-
-## 🚀 Deployment Scenarios
-
-### ⏰ CronJob Example
-
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-	name: zfsvolume-cleanup-cronjob
-spec:
-	schedule: "0 2 * * *"
-	jobTemplate:
-		spec:
-			template:
-				spec:
-					containers:
-					- name: cleanup
-						image: your-repo/zfsvolume-cleanup:latest
-						args:
-						- "--mode=cronjob"
-						envFrom:
-						- configMapRef:
-								name: zfsvolume-cleanup-config
-					restartPolicy: OnFailure
-```
-
-### 🚀 Deployment Example
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-	name: zfsvolume-cleanup-controller
-spec:
-	replicas: 1
-	selector:
-		matchLabels:
-			app: zfsvolume-cleanup
-	template:
-		metadata:
-			labels:
-				app: zfsvolume-cleanup
-		spec:
-			containers:
-			- name: controller
-				image: your-repo/zfsvolume-cleanup:latest
-				args:
-				- "--mode=controller"
-				envFrom:
-				- configMapRef:
-						name: zfsvolume-cleanup-config
-			restartPolicy: Always
-```
+You can deploy via helm charts provided under `charts` or with the deployment yamls provided in `deploy`.
 
 ## ✅ Configuration Validation & Error Messages
 
@@ -235,7 +170,6 @@ export $(cat .env | xargs)
 
 ./bin/manager --mode=cronjob
 ```
-
 
 ## 📄 License
 
