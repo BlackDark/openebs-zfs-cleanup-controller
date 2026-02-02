@@ -28,20 +28,20 @@ jobs:
     steps:
       # Get the repository's code
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Inject enhanced GitHub environment variables
         uses: rlespinasse/github-slug-action@v5
 
       # Set up Go
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25.6"
 
       # Cache Go modules
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -52,7 +52,7 @@ jobs:
 
       # Cache Docker layers
       - name: Cache Docker layers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
