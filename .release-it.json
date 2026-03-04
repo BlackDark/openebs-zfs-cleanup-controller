@@ -35,7 +35,7 @@
   },
   "hooks": {
     "after:bump": [
-      "sd 'appVersion: \"[^\"]*\"' 'appVersion: \"${version}\"' charts/openebs-zfs-cleanup-controller/Chart.yaml"
+      "sed -i 's/appVersion: \"[^\"]*\"/appVersion: \"${version}\"/g' charts/openebs-zfs-cleanup-controller/Chart.yaml"
     ],
     "before:git:release": ["git add ."],
     "after:release": "echo \"RELEASED_VERSION=${version}\" >> $GITHUB_ENV"
