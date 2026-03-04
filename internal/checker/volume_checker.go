@@ -208,8 +208,16 @@ func (vc *VolumeChecker) ValidateForAction(ctx context.Context, zfsVol *zfsv1.ZF
 			return nil, fmt.Errorf("failed to check for related PVC: %w", err)
 		}
 		if pvc == nil {
-			logger.V(0).Info("No related PVC found for PV, ZFSVolume is orphaned", "status", "ORPHANED", "reason", "PV exists but no related PersistentVolumeClaim found", "pv", pv.Name, "pvPhase", pv.Status.Phase, "pvClaimRef", pv.Spec.ClaimRef, "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace, "checkDuration", time.Since(start))
-			isOrphaned = true
+			if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+				logger.Info("ZFSVolume skipped: PV has Retain reclaim policy with no PVC (PV in Released state)",
+					"pv", pv.Name, "pvPhase", pv.Status.Phase,
+					"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
+					"volumeName", zfsVol.Name, "namespace", zfsVol.Namespace)
+				// isOrphaned stays false — admin explicitly chose to retain this PV's data
+			} else {
+				logger.V(0).Info("No related PVC found for PV, ZFSVolume is orphaned", "status", "ORPHANED", "reason", "PV exists but no related PersistentVolumeClaim found", "pv", pv.Name, "pvPhase", pv.Status.Phase, "pvClaimRef", pv.Spec.ClaimRef, "pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy, "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace, "checkDuration", time.Since(start))
+				isOrphaned = true
+			}
 		} else {
 			logger.V(1).Info("Found related PVC, ZFSVolume is not orphaned", "status", "NOT_ORPHANED", "reason", "active PV and PVC references found", "pv", pv.Name, "pvPhase", pv.Status.Phase, "pvc", pvc.Name, "pvcNamespace", pvc.Namespace, "pvcPhase", pvc.Status.Phase, "volumeName", zfsVol.Name, "checkDuration", time.Since(start))
 		}
@@ -230,9 +238,9 @@ func (vc *VolumeChecker) ValidateForAction(ctx context.Context, zfsVol *zfsv1.ZF
 	}
 	if result.IsSafe {
 		result.Reason = "All safety checks passed"
-		logger.V(0).Info("ZFSVolume passed all safety validation checks", "validationResult", "PASSED", "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace)
+		logger.V(1).Info("ZFSVolume passed all safety validation checks", "validationResult", "PASSED", "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace)
 	} else {
-		logger.V(0).Info("ZFSVolume failed safety validation checks", "validationResult", "FAILED", "failureReason", result.Reason, "validationErrors", result.ValidationErrors, "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace)
+		logger.V(1).Info("ZFSVolume failed safety validation checks", "validationResult", "FAILED", "failureReason", result.Reason, "validationErrors", result.ValidationErrors, "volumeName", zfsVol.Name, "namespace", zfsVol.Namespace)
 	}
 	return result, nil
 }
@@ -246,7 +254,7 @@ func orphanedValidation(isOrphaned bool) validationFunc {
 			result.IsSafe = false
 			result.Reason = "ZFSVolume is not orphaned"
 			result.ValidationErrors = append(result.ValidationErrors, "volume has active PV or PVC references")
-			logger.V(0).Info("ZFSVolume is not orphaned, not safe to delete", "validationResult", "FAILED")
+			logger.V(1).Info("ZFSVolume is not orphaned, not safe to delete", "validationResult", "FAILED")
 			return false
 		}
 		return true
@@ -278,7 +286,7 @@ func deletionTimestampValidation(zfsVol *zfsv1.ZFSVolume, result *ValidationResu
 		result.IsSafe = false
 		result.Reason = "ZFSVolume is already being deleted"
 		result.ValidationErrors = append(result.ValidationErrors, fmt.Sprintf("deletion timestamp: %v", zfsVol.DeletionTimestamp))
-		logger.V(0).Info("ZFSVolume is already being deleted", "deletionTimestamp", zfsVol.DeletionTimestamp, "validationResult", "FAILED")
+		logger.V(1).Info("ZFSVolume is already being deleted", "deletionTimestamp", zfsVol.DeletionTimestamp, "validationResult", "FAILED")
 		return false
 	}
 	return true
@@ -290,7 +298,7 @@ func ageValidation(zfsVol *zfsv1.ZFSVolume, result *ValidationResult, logger log
 		result.IsSafe = false
 		result.Reason = "ZFSVolume is too new (created within last 5 minutes)"
 		result.ValidationErrors = append(result.ValidationErrors, fmt.Sprintf("created at: %v", zfsVol.CreationTimestamp))
-		logger.V(0).Info("ZFSVolume is too new, not safe to delete", "creationTimestamp", zfsVol.CreationTimestamp, "age", age.String(), "minimumAge", minVolumeAge.String(), "validationResult", "FAILED")
+		logger.V(1).Info("ZFSVolume is too new, not safe to delete", "creationTimestamp", zfsVol.CreationTimestamp, "age", age.String(), "minimumAge", minVolumeAge.String(), "validationResult", "FAILED")
 		return false
 	}
 	return true
@@ -422,7 +430,7 @@ func (vc *VolumeChecker) FindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVol
 			"hasCSI", pv.Spec.CSI != nil)
 
 		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle == zfsVol.Name {
-			logger.V(0).Info("Found matching PV via CSI volumeHandle",
+			logger.V(1).Info("Found matching PV via CSI volumeHandle",
 				"pv", pv.Name,
 				"volumeHandle", pv.Spec.CSI.VolumeHandle,
 				"pvPhase", pv.Status.Phase,
@@ -433,7 +441,7 @@ func (vc *VolumeChecker) FindRelatedPV(ctx context.Context, zfsVol *zfsv1.ZFSVol
 			return pv, nil
 		}
 		if pv.Name == zfsVol.Name {
-			logger.V(0).Info("Found matching PV via direct name matching",
+			logger.V(1).Info("Found matching PV via direct name matching",
 				"pv", pv.Name,
 				"pvPhase", pv.Status.Phase,
 				"pvReclaimPolicy", pv.Spec.PersistentVolumeReclaimPolicy,
@@ -468,7 +476,7 @@ func (vc *VolumeChecker) FindRelatedPVC(ctx context.Context, pv *corev1.Persiste
 
 	// Check if PV has a claimRef
 	if pv.Spec.ClaimRef == nil {
-		logger.V(0).Info("PV has no claimRef, no related PVC",
+		logger.V(1).Info("PV has no claimRef, no related PVC",
 			"pvName", pv.Name,
 			"pvPhase", pv.Status.Phase,
 			"result", "no claimRef",
@@ -497,7 +505,7 @@ func (vc *VolumeChecker) FindRelatedPVC(ctx context.Context, pv *corev1.Persiste
 
 	if err := vc.Get(ctx, pvcKey, pvc); err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			logger.V(0).Info("PVC referenced by PV not found",
+			logger.V(1).Info("PVC referenced by PV not found",
 				"pvName", pv.Name,
 				"pvcName", claimRef.Name,
 				"pvcNamespace", claimRef.Namespace,

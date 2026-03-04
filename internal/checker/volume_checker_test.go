@@ -153,6 +153,64 @@ func TestVolumeChecker_IsOrphaned_EdgeCases(t *testing.T) {
 			expectError:    false,
 		},
 		{
+			name: "not orphaned - PV has Retain reclaim policy, PVC deleted",
+			zfsVolume: &zfsv1.ZFSVolume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-12345678-1234-1234-1234-123456789012",
+					Namespace: "openebs",
+				},
+			},
+			existingPVs: []corev1.PersistentVolume{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pv-retained"},
+					Spec: corev1.PersistentVolumeSpec{
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+						PersistentVolumeSource: corev1.PersistentVolumeSource{
+							CSI: &corev1.CSIPersistentVolumeSource{
+								VolumeHandle: "pvc-12345678-1234-1234-1234-123456789012",
+							},
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "deleted-pvc",
+							Namespace: "default",
+						},
+					},
+				},
+			},
+			existingPVCs:   []corev1.PersistentVolumeClaim{},
+			expectedResult: false,
+			expectError:    false,
+		},
+		{
+			name: "orphaned - PV has Delete reclaim policy, PVC deleted",
+			zfsVolume: &zfsv1.ZFSVolume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pvc-12345678-1234-1234-1234-123456789012",
+					Namespace: "openebs",
+				},
+			},
+			existingPVs: []corev1.PersistentVolume{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "pv-delete-policy"},
+					Spec: corev1.PersistentVolumeSpec{
+						PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+						PersistentVolumeSource: corev1.PersistentVolumeSource{
+							CSI: &corev1.CSIPersistentVolumeSource{
+								VolumeHandle: "pvc-12345678-1234-1234-1234-123456789012",
+							},
+						},
+						ClaimRef: &corev1.ObjectReference{
+							Name:      "deleted-pvc",
+							Namespace: "default",
+						},
+					},
+				},
+			},
+			existingPVCs:   []corev1.PersistentVolumeClaim{},
+			expectedResult: true,
+			expectError:    false,
+		},
+		{
 			name: "orphaned - PV exists but no claimRef",
 			zfsVolume: &zfsv1.ZFSVolume{
 				ObjectMeta: metav1.ObjectMeta{
