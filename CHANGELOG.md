@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 
 
+## [0.1.4](https://github.com/BlackDark/openebs-zfs-cleanup-controller/compare/v0.1.3...v0.1.4) (2026-03-04)
+
+### Bug Fixes
+
+* skip ZFSVolumes with Retain reclaim policy; reduce log verbosity ([db0e882](https://github.com/BlackDark/openebs-zfs-cleanup-controller/commit/db0e8829a23f227ca9e791b09589d07386efcb4f))
+* sync helm chart appVersion and fix release/workflow issues ([0a49d76](https://github.com/BlackDark/openebs-zfs-cleanup-controller/commit/0a49d7677808720bc54777fcc3f1ca9588d5dc9d))
+* use sed instead of sd in release-it hook (sd not available in CI) ([92f13fe](https://github.com/BlackDark/openebs-zfs-cleanup-controller/commit/92f13fe71cf3a44b3949f85b5d9dcf7b8d7ce94f))
+
 ## [0.1.3](https://github.com/BlackDark/openebs-zfs-cleanup-controller/compare/v0.1.2...v0.1.3) (2026-03-04)
 
 ### Bug Fixes
