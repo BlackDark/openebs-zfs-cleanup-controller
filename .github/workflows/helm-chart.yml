@@ -1,21 +1,19 @@
 name: Release Charts
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - "main"
-    paths:
-      - "charts/openebs-zfs-cleanup-controller/**"
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
 
 jobs:
   release:
-    permissions:
-      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
