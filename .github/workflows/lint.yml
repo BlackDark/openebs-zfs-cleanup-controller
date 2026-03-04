@@ -24,7 +24,9 @@ jobs:
       - name: Cache Go modules
         uses: actions/cache@v5
         with:
-          path: ~/go/pkg/mod
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
@@ -43,3 +45,6 @@ jobs:
         with:
           version: v2.4.0
           args: --timeout=5m
+
+      - name: Helm lint
+        run: helm lint charts/openebs-zfs-cleanup-controller

@@ -7,21 +7,21 @@ The controller is running in scheduled cleanup mode via CronJob ({{ .Values.cron
 {{- end }}
 
 To check the status:
-  kubectl get pods -n {{ .Values.namespace }}
+  kubectl get pods -n {{ .Release.Namespace }}
 {{- if eq .Values.mode "cronjob" }}
-  kubectl get cronjob -n {{ .Values.namespace }}
+  kubectl get cronjob -n {{ .Release.Namespace }}
 {{- end }}
 
 To view logs:
 {{- if eq .Values.mode "deployment" }}
-  kubectl logs -n {{ .Values.namespace }} deployment/{{ include "openebs-zfs-cleanup-controller.fullname" . }}
+  kubectl logs -n {{ .Release.Namespace }} deployment/{{ include "openebs-zfs-cleanup-controller.fullname" . }}
 {{- else if eq .Values.mode "cronjob" }}
-  kubectl logs -n {{ .Values.namespace }} -l app={{ include "openebs-zfs-cleanup-controller.fullname" . }}-cronjob
+  kubectl logs -n {{ .Release.Namespace }} -l app={{ include "openebs-zfs-cleanup-controller.fullname" . }}-cronjob
 {{- end }}
 
 {{- if eq .Values.mode "deployment" }}
 To check metrics (if Prometheus is configured):
-  kubectl port-forward -n {{ .Values.namespace }} svc/{{ include "openebs-zfs-cleanup-controller.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "openebs-zfs-cleanup-controller.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
   # Then visit http://localhost:{{ .Values.service.port }}/metrics
 {{- end }}
 
