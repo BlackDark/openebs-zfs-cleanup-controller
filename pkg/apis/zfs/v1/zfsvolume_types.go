@@ -79,7 +79,3 @@ type ZFSVolumeList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ZFSVolume `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&ZFSVolume{}, &ZFSVolumeList{})
-}
