@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 
 
+## [0.1.5](https://github.com/BlackDark/openebs-zfs-cleanup-controller/compare/v0.1.4...v0.1.5) (2026-07-20)
+
+### Bug Fixes
+
+* **deps:** update all go updates (without major) ([540f014](https://github.com/BlackDark/openebs-zfs-cleanup-controller/commit/540f014a1a9dfb802f8935b850033f165b3bbaa1))
+* **deps:** update all go updates (without major) ([#15](https://github.com/BlackDark/openebs-zfs-cleanup-controller/issues/15)) ([c4eda5c](https://github.com/BlackDark/openebs-zfs-cleanup-controller/commit/c4eda5cb5dd67a75dda49bd6f53de6a4d5e4568e))
+* re-enable helm chart releaser with correct trigger ([646a01e](https://github.com/BlackDark/openebs-zfs-cleanup-controller/commit/646a01e59d022bf932748dbe00c8ed8bb7c7c8ea))
+* replace deprecated controller-runtime scheme.Builder ([9d0a04c](https://github.com/BlackDark/openebs-zfs-cleanup-controller/commit/9d0a04c986afb1f6471ecfe1d6edd50fe70e8806))
+
 ## [0.1.4](https://github.com/BlackDark/openebs-zfs-cleanup-controller/compare/v0.1.3...v0.1.4) (2026-03-04)
 
 ### Bug Fixes
