@@ -24,7 +24,7 @@ jobs:
           git config user.email "blackdark-pusher@users.noreply.github.com"
           git config user.name "blackdark-pusher[bot]"
 
-      - uses: pnpm/action-setup@v6.0.9
+      - uses: pnpm/action-setup@v6.0.10
         with:
           version: latest
 
