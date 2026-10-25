@@ -48,3 +48,12 @@ jobs:
 
       - name: Helm lint
         run: helm lint charts/openebs-zfs-cleanup-controller
+
+  check:
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
