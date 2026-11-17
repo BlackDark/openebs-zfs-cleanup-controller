@@ -76,17 +76,17 @@ jobs:
           GIT_REF: ${{ github.ref }}
         run: |
           if [[ "$EVENT_NAME" == 'workflow_dispatch' ]]; then
-            echo "MANUAL_RUN=true" >> $GITHUB_OUTPUT
+            echo "MANUAL_RUN=true" >> ""
           else
-            echo "MANUAL_RUN=false" >> $GITHUB_OUTPUT
+            echo "MANUAL_RUN=false" >> ""
           fi
 
           if [[ "$EVENT_NAME" == 'workflow_dispatch' || "$GIT_REF" == refs/tags/* ]]; then
-            echo "platforms=linux/amd64,linux/arm64" >> $GITHUB_OUTPUT
-            echo "push=true" >> $GITHUB_OUTPUT
+            echo "platforms=linux/amd64,linux/arm64" >> ""
+            echo "push=true" >> ""
           else
-            echo "platforms=linux/amd64" >> $GITHUB_OUTPUT
-            echo "push=false" >> $GITHUB_OUTPUT
+            echo "platforms=linux/amd64" >> ""
+            echo "push=false" >> ""
           fi
 
       #      - name: Available platforms
