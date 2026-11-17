@@ -2,56 +2,117 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # renovate: datasource=npm depName=renovate
+  RENOVATE_VERSION: "44.221.1"
 
 jobs:
-  test:
-    name: Lint & Test
+  changes:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.areas.outputs.code }}
+      lint: ${{ steps.areas.outputs.lint }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.27.3"
+          fetch-depth: 2
+          persist-credentials: false
+      - id: areas
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            { echo "code=true"; echo "lint=true"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --no-renames --name-only -z HEAD^1 HEAD > "$RUNNER_TEMP/changed-paths"
+          code=false
+          lint=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              docs/* | *.md | LICENSE) ;;
+              .github/workflows/lint.yml) code=true; lint=true ;;
+              mise.toml | .mise.toml | mise.lock | .mise.lock | .config/mise* | mise/* | .mise/*) code=true; lint=true ;;
+              .github/* | renovate.json | renovate.json5) lint=true ;;
+              *) code=true ;;
+            esac
+          done < "$RUNNER_TEMP/changed-paths"
+          { echo "code=$code"; echo "lint=$lint"; } >> "$GITHUB_OUTPUT"
 
-      - name: Cache Go modules
-        uses: actions/cache@v6.1.0
+  app:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Run tests
-        run: go test ./...
-
-      - name: Run go vet
-        run: go vet ./...
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9.3.0
+          persist-credentials: false
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
         with:
-          version: v2.15.0
-          args: --timeout=5m
+          cache_save: ${{ github.workflow == 'CI' && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+      - run: mise run check
 
-      - name: Helm lint
-        run: helm lint charts/openebs-zfs-cleanup-controller
+  actionlint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        with:
+          install_args: actionlint
+          cache_save: false
+      - run: actionlint -color
+
+  renovate-config:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.13.1
+          package-manager-cache: false
+      - run: npx --yes --package "renovate@${RENOVATE_VERSION}" -- renovate-config-validator --strict
+
+  zizmor:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          inputs: .github/workflows
+          advanced-security: false
+          annotations: true
 
   check:
     if: always()
-    needs: [test]
+    needs: [changes, app, actionlint, renovate-config, zizmor]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
